@@ -1,0 +1,17 @@
+# Keil MDK-ARM
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+MDK-ARM/*.uvguix.*
+MDK-ARM/*.dbgconf
+MDK-ARM/sorting_device_f407/
+
+# 本仓库 uVision 输出（相对 Project/ 与 TEST/Target/Project）
+Project/Objects/
+Project/Listing/
+Project/*.uvguix.*
+Project/*.log
+Project/_*.log
+build_log.txt
+../TEST/Target/Project/Objects/
+../TEST/Target/Project/Listing/
+**/*/Output/

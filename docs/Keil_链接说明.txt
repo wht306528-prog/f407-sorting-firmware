@@ -1,0 +1,20 @@
+Keil / MDK 链接说明（F407_Target）
+
+一、L6002U：找不到 xxx.o（例 stm32f4xx_rtc.o）
+· 多为 Objects 目录下 Dropbox「冲突副本」或杀毒软件删掉中间文件，依赖列表与实际不一致。
+· 处理：删除 Objects / Listing 下 *(冲突副本)*、*(…冲突副本…)* 等副本文件；Project → Clean Targets；
+  关闭 Keil 后清空 Objects、Listing；再 Rebuild。
+· 仍有问题时对单个源文件右键 Compile，确认 Objects 里生成同名 .o。
+
+二、L6406E / L6407E：RAM 放不下（.ANY selector）
+· 本工程静态缓冲区较大（如 app_protocol 中行缓冲、s_raw_build/s_raw_last 等），ZI 总量可达约 180KB+
+  量级；仅用片上 SRAM 128KB（0x20000000）会超限。
+· 已在工程中启用分散加载文件 stm32f407.sct：将 Ethernet 驱动 stm32f429_eth.o 固定在 SRAM，
+  其余 RW/ZI 由链接器分配到 SRAM + CCM（0x10000000，64KB）。
+· Project.uvprojx 链接选项应为：不使用 Target 对话框自动生成 scatter（umfTarg=0），ScatterFile 填写
+  stm32f407.sct（与 .uvprojx 同目录，文件名勿写 .\ 前缀以免个别环境下路径解析失败）。
+· System/system_stm32f4xx.c 中 SystemInit 已开启 CCM 所需 AHB1 时钟（RCC_AHB1Periph_CCMDATARAMEN）。
+
+三、说明
+· CCM 不可被 Ethernet DMA 访问，因此 ETH 缓冲区必须留在 0x20000000 区；其余模块若需 DMA，
+  请勿把对应缓冲区放到 CCM（可通过分散加载或 section 属性约束）。

@@ -1,0 +1,19 @@
+; STM32F407ZG：SRAM 128KB @0x20000000 + CCM 64KB @0x10000000
+; CCM 不能被 Ethernet DMA 访问：仅将 stm32f429_eth 的 RW/ZI 固定在 SRAM，其余由链接器分配到两区。
+;
+; Keil 工程设置（与本仓库一致）：Linker 中 umfTarg=0、useFile=0，ScatterFile=.\stm32f407.sct
+
+LR_IROM1 0x08000000 0x00100000  {
+  ER_IROM1 0x08000000 0x00100000  {
+   *.o (RESET, +First)
+   *(InRoot$$Sections)
+   .ANY (+RO)
+  }
+  RW_IRAM1 0x20000000 0x00020000  {
+   stm32f429_eth.o (+RW +ZI)
+   .ANY (+RW +ZI)
+  }
+  RW_CCM 0x10000000 0x00010000  {
+   .ANY (+RW +ZI)
+  }
+}

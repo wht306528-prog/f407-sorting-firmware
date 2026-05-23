@@ -1,0 +1,194 @@
+================================================================================
+  F407 分拣固件 — 维护说明（纯文本主文档）
+  工程：F407/Project/Project.uvprojx（STM32F407ZGTx，裸机单线程 + lwIP）
+  本文为纯 ASCII/中文标点说明，不使用 Markdown 加粗反引号等排版符号。
+================================================================================
+
+【一、功能全貌与边界】
+  · 运行于野火 F407 + NT35510 + RMII 以太网（LAN8742A）+ GT911 触摸。
+  · 视觉矩阵入口：RJ45 TCP 文本帧 Matrix_Raw（3588 或 PC 客户端 → F407 服务端）。
+    F407 不运行 ROS2；ROS2 节点仅在 3588 侧将话题序列化为本协议。
+  · 运动控制：USART1 RS485 Modbus 主站（伺服 ×2、七色报警灯等共用总线）。
+  · Matrix_Raw 校验逻辑在固件内：app_matrix_raw_validator.c（避免双份规则漂移）。
+  · 机械参数真源：
+      - 减速比：global_config.h → CFG_ICHUANDONG_RATIO（示例 30：电机角:关节角）
+      - 相机→苗盘→臂平面标定、对称五连杆杆长与零位脉冲：
+        Project/User/calibration/app_calibration_params.h（由 Calibration/apply_calibration_to_f407.py
+        或 Calibration/calibrate_device.py apply-f407 从 calibration_results.json 生成）
+      - app_kinematics.h 内 ARM_PARAM_*：名义参考；运行时逆解以 app_calibration_params.h 的 CALIB_ARM_* 为准
+
+【二、源码索引（与 Keil User 组一致）】
+  main.c                    主循环：网络 → 触摸 → KEY1/KEY2 → AppSort_Poll → 刷屏
+  app_sort.c / .h           RUN/WAIT_TCP/SORTING · FL 标志机；RJ45 机械臂子步静默丢弃见 AppSort_ShouldDiscardTcpMatrixStream；采样关闸见 AppProtocol_ShouldAcceptStream
+  ui/app_display.c / .h      NT35510 主页与各区域字段、Raw/Final 分页、485 HEX 轨迹
+  app_protocol.c / .h       TCP Matrix_Raw 流式解析、checksum、矩阵写入
+  app_matrix_raw_validator   ASCII 校验累加、格位合法性、帧结果标志位
+  app_matrix_test.c / .h    遗留调试（可向协议栈注入随机矩阵）；与板载 KEY2 无绑定
+  app_matrix.c / .h         矩阵缓存、逆解调度、分拣查询 API
+  app_tcp_server.c          lwIP 矩阵 TCP 服务端
+  app_motor.c / modbus_master.c   RS485 伺服流水线
+  app_alarm_light.c         报警灯 FC06
+  global_config.h           IP、端口、引脚宏、MATRIX_*、伺服寄存器宏（唯一真源）
+  F407/docs/系统工作逻辑与返回值说明.txt   系统链路、返回值、Δ 脉冲语义、分拣抽象与漏洞闭环
+
+【三、默认网络（改 IP 只改 global_config.h 中 CFG_NET_*）】
+  · 本机 IP 示例：192.168.137.155 / 掩码 255.255.255.0 / 网关 192.168.137.1
+  · Matrix TCP 端口：CFG_NET_MATRIX_TCP_SERVER_PORT（当前十进制 5000；app_tcp_server 绑定 CFG_NET_LOCAL_IP 与该端口）
+  · 3588/PC 为 TCP 客户端，连接目标为上述本机 IP:端口；F407 为服务端（app_tcp_server）。
+  · 屏内网测目标 IP/端口：CFG_NET_TEST_TARGET_IP*、CFG_NET_TEST_TARGET_TCP_PORT（当前随 Matrix 端口测 192.168.137.154:5000），
+    用于 ICMP+TCP 连通性自检；与 Matrix 数据方向无关。
+
+【三之二、TCP Matrix 跑通步骤（3588/鲁班猫 → F407）】
+  · Matrix 连接已注册 lwIP tcp_err：RST/超时等会清 Mx/远端 IP 占位并 AppProtocol_Init+AppMatrix_Clear（与 FIN 一致）。
+  1) 网线直连或经交换机；F407 本机 IP 与掩码见 global_config.h（示例 192.168.137.155/24）；3588 为同网段客户端（示例 192.168.137.154）。
+  2) 3588 侧使用 TCP **客户端** 连接 F407「本机 IP:5000」，不要使用「3588 listen、F407 主动连」。
+  3) 可选：在 3588 上 ping F407 本机 IP；屏底栏 Net 页可看 ICMP 与对 CFG_NET_TEST_TARGET 的 TCP 探测（与 Matrix 数据方向无关）。
+  4) 每帧文本必须以换行结束；**顺序为** START → M 行 CSV → END checksum=… → 单独一行 tray_total=3（该行不计入 checksum）。
+  5) 主页行 1：Ln=链路、Ls=监听、Mx=是否有客户端；**rx**=本连接已送入解析器的 TCP 字节数；**#** 后整数为完整矩阵提交成功次数。Alarm 行见 TCP:/MAT: 等字面。
+  6) 无矩阵数据时 Tray 行显示 **--**，非 ERR；有矩阵后各盘判定见下节行 5。
+
+【四、Matrix_Raw 文本帧（与 app_protocol.c 一致）】
+  帧结构（每行以 \n 结束；可带 \r，\r 被忽略）：
+
+    START[,frame_id=N][,count=M]
+    tray_id,col,row,class_id,confidence,u,v,z_mm    （小数列按固件解析后取整）
+    ... 恰好 M 行数据 ...
+    END checksum=<acc>
+    tray_total=<3>                                   ← 单行，参与帧结束但不计入 checksum
+
+  约束摘要：
+    1) 满格时 START 中 count 须等于编译期 MATRIX_EXPECTED_ROWS（默认 150）。
+    2) **数据行列 col、row 为 1 基**（1≤col≤5，1≤row≤10；tray_id 为 1、2、3）。8 列逗号分隔，部分列支持小数再由固件换算。
+    3) confidence：上位机常以 **小数 0～100×** 置信度写入，固件先做 **×100 四舍五入**再截到 MATRIX_CONFIDENCE_MAX；
+       u,v、z(mm) 小数解析后 **四舍五入成整数**。class_id：0 空穴，1、2 类别。
+    4) **checksum：** 对每个数据行按其 **原始字节串（含小数点但不含末尾 \\n/\\r）** 逐项累加，模 65536；不含 START、不含 END，
+       **也不含 tray_total 行**。END 行成功后再验收 tray_total（须等于 MATRIX_TRAY_COUNT）；否则整帧丢弃。
+    5) 满格时 (tray_id,col,row) 在 M 行内须唯一且覆盖全部穴位。
+    6) **采样窗口（MATRIX_SAMPLE_WINDOW_FRAMES，默认 1，global_config.h，可改为 2～4）：**
+       上位机可连续发送多帧；仅在「END+tray_total 后格位校验通过」的帧才计入窗口合法性计数。
+       收满 N 个合法帧后，固件按 **非空穴位（class_id≠0）数量最多** 选一帧写入矩阵；并列时按 **各行 confidence 之和÷行数（均值）** 更高优先，再并列取 **窗口内较新序号** 的帧。
+       **CFG_TCP_MATRIX_KEEP_RX_OPEN_AFTER_OK**（默认 1，global_config.h）：择优写入成功后调用 `AppProtocol_ReopenGateKeepLastOk`，**保持解析开窗且不清零 AppProtocol_LastChecksumOk**，
+       便于同一条 TCP 上鲁班猫持续下发；若改为 0，则写入成功后关闸，须传送带 FL4/FL5/FL6 的 `AppProtocol_ArmSampleWindow` 或新 TCP 连接才再收帧。
+       **AppProtocol_LastChecksumOk / RAW Grid 生效** 在择优写入矩阵之后才代表「本批矩阵可用」；未满窗或未提交前不得视为最终矩阵就绪（默认 N=1 时与单帧等价）。
+
+【五、Matrix_Raw 校验标志位（主程序可读）】
+  头文件 app_matrix_raw_validator.h：
+    APP_MATRIX_RAW_FL_TCP_CHK   (0x01) END checksum 与数据行累加一致
+    APP_MATRIX_RAW_FL_GRID_OK   (0x02) 格位校验通过且已写入 app_matrix
+  API：AppMatrixRaw_GetLastFlags(void)
+  协议失败路径会清零标志（protocol_fail_clear_matrix 内 NotifyTcpFrameDone(0,0)）。
+
+【六、KEY1 / KEY2】（改 KEY2 预制 Modbus 字节见本节「KEY2 改哪儿」）
+  · KEY1 硬件 PA0 EXTI0；KEY2 PC13 EXTI（下降沿）。ISR 只置位，在 F407/Project/User/main.c 里 EXTI_Pop。
+  · KEY1：AppArm_GoHome() — 两轴经 RS485（AppMotor_GotoPulse）回到 app_calibration_params.h 中 CALIB_JOINT*_ZERO_PULSE（MCU 零点/基座标原点语义）。
+           接着 AppIndicator_SetState(APP_IND_OK_HOLD)，板载 RGB **绿色**；RunFlag `KEY1 HOME`。
+  · KEY2：ModbusMaster_SendRawBlocking(g_demo_key2_modbus_pdu, …)，整段 RTU 已含 CRC（演示：报警灯写入等）。
+           成功：`APP_IND_ARM_RUN` → 板载 RGB **蓝色**；RunFlag `KEY2 RAW TX`；失败 Alarm 带 KEY2 与数值错误码及 ErrTag。
+    KEY2 改哪儿：文件 F407/Project/User/demo_modbus_frames.h 内 g_demo_key2_modbus_pdu；改任何数据字节必须重算 Modbus CRC16。
+    默认值（示波核对）：站 03，FC06，寄存器 0x00C2，写值 0x0011，整帧 `03 06 00 C2 00 11 E9 D8`（CRC 低字节在前）。
+  · 板载 KEY2 **不再** 调用 AppSort_RequestEstop。RequestEstop / ESTOP 大状态仍为代码能力（供将来上位机、触摸等接入）；若进入 ESTOP，行为如下：
+           Modbus 侧顺序：BSP_Actuators_AllSafe → P0D-18=511（Disable）→ P0D-05=1（急停模式，见 sort_safe_stop_outputs + SetEmergencyMode）。
+           ESTOP 大状态下 Poll 每 SERVO_POS_POLL_MS（默认 100ms）FC03 读两轴 P0B-07 缓存脉冲，`AppSort_GetEstopMonitoredPositions` / 主页 Servo 行后缀 EPos 可读。
+           清除闭锁：`AppSort_RequestClearFault` 写 P0D-05=0、P0D-08=0（ClearTrigger）等后回 IDLE。
+           Fault 字面可为 `ESTOP(latch)` 等。
+
+【七、RS485 与示波器】
+  硬件 PA9 TX、PA10 RX、PC0 DE；波特率 CFG_RS485_BAUD（默认 115200 8N1）。
+  预制字节表 demo_modbus_frames.h；主页 HEX trace ui/app_display.c。
+  SendRawBlocking 与 SendRawNoResponse：缓冲区必须已含 CRC；业务收发用 FC03/06/10，由主机自动追加 CRC。
+
+【七点五、NT35510 屏 — 逐项与全部可取值的含义】
+  竖屏时分辨率约 480×800（bsp_nt35510_lcd.c 默认 LCD_SCAN_MODE=6，LCD_X×LCD_Y=480×800）；横屏时为 800×480（其它 SCAN_MODE）。
+  底栏固定 48 像素高；竖屏时底栏触控区为逻辑 y≥752（800−48）。
+  底栏触控经 app_display 中 touch_normalize_bottom_bar：对 GT911 坐标尝试原值、轴镜像、XY 交换等 8 种候选，
+  第一个落入上述底栏条带的坐标用于分段，避免因触摸与面板扫描方向不一致导致点不到 Net/Raw/Final。
+  主页底栏四分栏：Net（网络测试子页）| Home（清 Final 摘要自动滚起点，仍在主页）| Raw（Raw 子页）| Final（Final 子页）。
+  底栏绘制：浅底 + 黑字；按下段黄底 + 黑字；标签用 Font16x32。主内容区主文字 Font8x16（较旧版 16×32 更密，便于多看几行）。
+  主页逻辑行 0～17（APP_LINES=18）；6～8 行 HEX 用小号缓冲区绘制（过长仍可缩字体）；刷新节流 CFG_UI_REFRESH_MS。
+  gt9xx.c 仍直接上报 GT911 坐标；若现场改 LCD_SCAN_MODE 或面板方向，依赖上述归一化适配底栏，内容区若触控轴向仍异常需另调整屏映射。
+
+  ──行 0：IP:x.x.x.x  Port:P  485:Bbps
+    LOCAL_IP 四字节、MATRIX_TCP_SERVER_PORT、CFG_RS485_BAUD。
+
+  ──行 1：Ln:UP/DN Ls:0/1 Mx:OK/-- R:Rip:port T154:--/../OK/NG F:x/N rx:字节 #计数 SYS:缩写
+    Ln：PHY link（gnetif NETIF_FLAG_LINK_UP）。
+    Ls：drv_network.net_listen，Matrix TCP listen 是否建立成功（1=LISTEN 就绪）。
+    Mx：drv_network.net_connect，是否有已接入的 Matrix TCP 客户端。
+    R：远端 IPv4 与端口（accept 时写入；FIN/RST/异常收包路径后清零）。
+    T154：对 CFG_NET_TEST_TARGET（默认 154:5000）最近一次自动/手动网测的 TCP 结果；-- 无结果、.. 扫描中、OK/NG 完成态。
+    rx：AppProtocol_GetStreamRxBytes，本 TCP 连接上已送入解析器的载荷字节累计（Init/断线重置）。
+    #：AppProtocol_GetMatrixFramesOkCount，完整矩阵择优写入成功次数。
+    F、SYS：同旧版 Final 计数与 AppSort_GetSysRunFlagText。
+
+  ──行 2：Alarm: ‹文本›
+    最后一次 AppDisplay_SetFaultText。
+    常见字面：idle、RUN、blocked: ESTOP clr、cleared,IDLE、ESTOP(latch)、
+    TCP:*、MAT:*、SYS44、MAT:IK、ARM、CNV、KEY1、KEY2 等；谁最后写入谁生效。
+
+  ──行 3：Servo: ‹大状态› ‹步› Tx/Rx t/r ErrTag/err ovf=V [可选 EPos:m1|m2]
+    第一段 «大状态»：AppSort_GetMainStateText，固定串之一 RUN 后接一空格 PAUS FAULT ESTOP IDLE 后接一空格。
+    第二段 «步»：W_TCP（等矩阵）或 SORT（已进分拣）；若某轮未填则显示减号 «-»。
+    t / r：Modbus 最近事务 TxLen / RxLen；
+    ErrTag 与 err：仅可能组合 OK(0) · TO(1) · CRC(2) · ADR(3) · FC(4) · BUF(5) · ARG(6) · BSY(7) · EXC(8) · LEN(9) · ABT(10) · ?(其它)；
+    ovf=：USART1 接收硬件溢出累计。
+    EPos（仅 ESTOP 大状态）：Poll 每 SERVO_POS_POLL_MS 读两轴 P0B-07 缓存，便于确认闭锁期间位置仍在更新。
+
+  ──行 4：RunFlag: ‹字符串›
+    默认轮询结尾 FL数字:缩写 + 空格 + W_TCP / SORT；
+    KEY1/KEY2/急停等可覆盖为 KEY1 HOME、KEY2 RAW TX、ESTOP … 与轮询文字交替出现属正常。
+
+  ──行 5：Tray T1=T2=T3=（取值 -- / OK / ERR / ?）
+    当 AppMatrix 有效行数为 0 时三段均为 **--**（尚无矩阵，非故障）。
+    有矩阵后：每段来自 CheckTrayFullOrEmpty：全空 class0 或全 class1 或全 class2 且格数齐 → OK；
+    格数不齐、混合类、非法类、该盘未出现于矩阵等 → ERR；其它意外 → ?。
+
+  ──行 6～8：三段 RS485 HEX
+    单行 TX: 或 RX: 加空格十六进制；过短噪声行变 ---------；过长自动缩小字体；无数据环缓可显 ---。
+
+  ──行 9：（字面）RAW:chk=… n=… smpl:… FINAL:… x/N geom:… 各段所有可能
+    RAW chk：--（无冻结行）· OK（checksum Ok）· BAD（有行但失败）；
+    n：RawLastLineCount 整数；
+    smpl：窗口开时 已收合法帧数/目标帧数（目标=MATRIX_SAMPLE_WINDOW_FRAMES）；窗口关（关闸且无新开窗）时 --；
+    FINAL 词：--（表空）· OK（行数=N 且 RawLastGridOk）· BAD（其余有行情况）；
+    再跟 x/N；
+    geom：--（无矩阵行）· WAIT（dirty）· OK（Flush 后全深度穴 geom_ok）· BAD（存在失败穴）。
+
+  ──行 10～17：rR tU c列|行|类 P:脉冲1|脉冲2 （Matrix_Final 存盘的两路绝对目标脉冲；geom 失败则可能为 0）；
+    缺行 --------- ；行数多于可视窗口时每 FINAL_AUTOSCROLL_MS（默认 1000ms）自动滚起点。
+    运动时 app_arm：AppMotor_GotoAbsTargetAsRelative；目标寄存器 FC16 写 32bit 脉冲（低字寄存器在前）。
+    点到点：写目标 → P0D-18=507 → P0D-08=3 → Wait（P0B-04.Bit0 或 |P0B-07−目标|≤SERVO_TARGET_TOL_PULSE）→ P0D-08=0。
+    global_config.h CFG_SERVO_POS_CMD_IS_REL_DELTA：0=写绝对终点（默认）；1=写 Δ，须核对驱动语义。
+    取料气缸节拍：`CFG_ARM_PICK_LOWER_MS`、`CFG_ARM_PICK_HOLD_MS`、`CFG_ARM_PICK_TO_MOVE_MS` 定义与注释见 global_config.h；调用链见 app_arm.c（valve_pick_sequence、PickPlace）。
+
+【七点六、网络测试子页（app_net_test + app_display compose_net_test）】
+  上电后 AppNetTest_Poll 按 APP_NETTEST_AUTO_CYCLE_MS（默认 12s）自动触发一轮：ICMP 扫本机 /24，再对 CFG_NET_TEST_TARGET 做 TCP connect 探测；仍可通过底栏 Start 手动立即执行。
+  屏显摘要：LINK、本机 LIP、SRV 端口与 LST/Mx/远端 R:、TGT 3588 地址与周期 CYC、Scan 进度、154 ICMP/TCP 结果、存活 IP 列表（More 滚动）。
+  与 Matrix 数据流方向无关：即使 3588 未连入 Matrix，仍应看到本机 LST=1；T154 表示对 154 端口是否可建连（对端需在 5000  accepting 才会 OK）。
+
+【七点七、RawMatrix 与 FinalMatrix 子页】
+  Font8×16 全屏 27 行；底三分栏 Prev Back Next。
+  Prev/Next：无 Raw/Final 数据或已到第一条/最后一条滚动边界时，主页 RunFlag 会分别显示 RAW/FINAL empty、first、last，避免误以为触摸失灵。
+  Raw：第 0 行为列标题，其余行为冻结 Raw 的 8 列紧凑视图（苗盘/列/行/类别/置信度/u/v/z，对应 TCP CSV，见 app_protocol 生成顺序）；读失败行显 ---。
+  Final：第 0～1 行为列标题；自第 2 行起每条矩阵记录占 2 行（第一行：索引+盘格+类+置信度+u+v+z+geom；第二行：Xc/Yc/Xw/Yw、两关节角°、两路目标脉冲）。Prev/Next 按「记录条」滚动（非按屏行）。Back 回主页。
+
+【七点八、RJ45 静默与应用关闸】RUN+SORTING+FL2/FL3 丢 TCP 不向 OnStream；FL4～6 不关此闸。
+  **采样关闸**：若 CFG_TCP_MATRIX_KEEP_RX_OPEN_AFTER_OK=0，择优写入成功后 AppProtocol_ShouldAcceptStream=0，载荷不入解析；
+  默认 **1** 时写入成功后 **仍开窗**，便于同连接持续下发；传送带 `run_conveyor_flag` 开头 `AppProtocol_ArmSampleWindow` 仍会清空窗口计数并置 LastChecksumOk=0，供下一轮采集。
+
+【八、数字 IO】见引脚逻辑表 PALEDCONVPHOTO等同 global_config。
+
+【九、主板验收】七条与源码门禁一致如上节；KEY1/KEY2 行为与 global_config.h 伺服宏须与示波抓包一致。
+
+【附录 A】五题正确答案均 A （题干见本节完整抄录）。
+  Q1 Final x/N ：A Final 当前有效行
+  Q2 RAW chk OK ：A checksum 快照 OK
+  Q3 geom WAIT ：A geom_dirty
+  Q4 Raw vs Final ：A 原文 CSV 与 MCU 快照
+  Q5 FL23 RJ45 ：A 应用层静默丢 TCP 载荷例外带子步后发
+
+【十、历史说明】RTOS 旧栈非本量产；ThirdParty 自带说明不归档。
+
+================================================================================
+  文档路径 F407/docs/F407_维护说明.txt
+  引脚表 F407/docs/F407_IO引脚与逻辑表.txt
+================================================================================

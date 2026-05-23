@@ -1,0 +1,271 @@
+================================================================================
+  F407 分拣设备 — 系统工作逻辑与返回值说明
+  主维护文档仍可先看：F407_维护说明.txt；本文侧重「链路 + 返回值 + Flag + 闭环」。
+  本文不写 Markdown；标号与文件名与工程中源码一致便于检索。
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+〇、本文回答什么
+────────────────────────────────────────────────────────────────────────────────
+· Matrix_Raw、Matrix_Final 在 MCU 内存里分别是啥，谁写入、谁在什么时候读完。
+· 为何 Matrix_Final 行末尾语义上是「两电机绝对目标脉冲」，运动前还要在程序里转成 Δ。
+· 通用「依次搬苗盘」的高层伪代码：`src_tray` → `dst_tray` → `class`，输出何种「完成 Flag」。
+· `AppArm_PickPlace` 返回的数字、`Modbus ErrTag`、`RAW/FINAL geom` 屏显各代表什么。
+· 正常数据从 TCP 进到机械臂动起来，从头到尾逐步怎么走。
+· 已知漏洞与建议修复、现场怎么验证。
+
+
+────────────────────────────────────────────────────────────────────────────────
+一、系统鸟瞰（单层循环里谁在跑）
+────────────────────────────────────────────────────────────────────────────────
+上电后主循环近似顺序（见 main.c、app_sort Poll）：
+  1）lwIP：矩阵 TCP；触摸；KEY1/KEY2（见四点五）。
+  2）AppSort_Poll：分拣状态机、矩阵几何刷新 Flush、机械臂搬运、传送带等。
+  3）AppDisplay_Refresh：把协议/矩阵/伺服状态画到 LCD。
+
+数据源只有两条主干：
+  A）RJ45 Matrix_Raw 文本帧（app_protocol）→ Raw 快照 + 语义校验通过后写入矩阵表。
+     接入方向：F407 在 global_config.h 的 CFG_NET_LOCAL_IP 与 CFG_NET_MATRIX_TCP_SERVER_PORT（当前十进制 5000；服务端 tcp_bind 绑定该 IP）
+     上运行 lwIP TCP 服务端 app_tcp_server（listen+accept）；3588、PC 等为客户端，应主动 connect 到 F407。
+     屏上 AppNetTest 对 CFG_NET_TEST_TARGET_*（默认 192.168.137.154:同端口）做 ICMP /24 与 TCP connect 探测，
+     仅用于链路/端口自检，不改变「客户端连 F407」角色。
+  B）RS485 Modbus Master（modbus_master + app_motor）：两轴伺服、报警灯等同总线。
+
+
+────────────────────────────────────────────────────────────────────────────────
+二、Matrix_Raw：接收与验证（不产生脉冲）
+────────────────────────────────────────────────────────────────────────────────
+入口：lwIP Accept 后对 AppProtocol_OnStream 逐字节推送；遇换行当一行。
+
+状态机概要（详见 app_protocol.c）：
+  1）START 行：清零上一帧可信度、清空矩阵、进入 BODY，解析 count=N。
+  2）BODY 行：对每个数据行先做 ChecksumAccumulate（原始字节串）；再解析 CSV。
+       · tray_id 1..3；col row 协议为 1 基；
+       · confidence 小数 ×100 四舍五入后进 0..MATRIX_CONFIDENCE_MAX；
+       · u v z_mm 小数四舍五入为整数。
+  3）END checksum=期望值：BODY _checksum 比对；count 与实际行对齐；暂不置矩阵完成。
+  4）WAIT_TRAY_TOTAL：再来一行 tray_total=M；必须 M==MATRIX_TRAY_COUNT（常为 3），
+       该行不参与 checksum。
+  5）tray_total 合法后调用 AppMatrix_SetFromTcpParser 写内存表；
+       Raw 冻结快照、TCP 可信度 AppProtocol_LastChecksumOk 才置 OK。
+
+语义失败：protocol_fail_clear_matrix 清零矩阵并可写简短 Fault ASCII（LCD Alarm 行）。
+常见前缀：TCP:、MAT:（见源码 protocol_fail_* 调用点）。
+
+
+────────────────────────────────────────────────────────────────────────────────
+三、Matrix_Final：何时生成、末尾两列是什么
+────────────────────────────────────────────────────────────────────────────────
+「Final」一词在工程里没有单独文件；指 MatrixFinalRow_t 结构体保存在 app_matrix.c 的全局表，
+由 AppMatrix_SetFromTcpParser 写入 Tray/类别/置信度/u v z 后再置 s_geom_dirty，主循环
+AppMatrix_FlushPendingGeometry → recompute_geom 填充几何与伺服目标。
+
+对每个有效行索引 i（0 .. s_used-1）几何流水线：
+  1）AppKinematics_UvRayTray_ToArmPlane(u,v)：像素射线与工作平面相交 → tray→arm，
+       写入 Xw_mm Yw_mm（平面目标；不把 z_mm 当「禁用逆解」门闩）。
+  2）Robotic_arm_dynamics_cal(flag=1, &th1,&th2, Xw,Yw)：对称五杆逆解，
+       theta* 已是「伺服命令关节角」（含 CALIB_JOINT*_SIGN / ZERO_DEG）。
+  3）若逆解 OK：
+       geom_ok      = 1
+       theta1_deg   = th1；theta2_deg = th2
+       pulse_motor1_abs = CALIB_JOINT1_ZERO_PULSE + AppMotor_ServoAngleToPulse(th1)
+       pulse_motor2_abs = CALIB_JOINT2_ZERO_PULSE + AppMotor_ServoAngleToPulse(th2)
+     否则：
+       geom_ok = 0；角度与脉冲清零；机械臂不得以「假想 0°」盲走此行。
+
+末尾两列（结构体字面顺序最后两个 int32 字段）：pulse_motor1_abs、pulse_motor2_abs，
+表示「相对于机械定义的绝对目标脉冲」（见 app_calibration_params.h 中零点脉冲语义）。
+它们不是上位机下发的；是 F407 在几何阶段算出来后存盘，LCD Final 页的 P:字段读的就是它们。
+
+注意：Tcp Matrix_Raw CSV 仍为 8 列，没有把脉冲作为文本列。
+
+
+────────────────────────────────────────────────────────────────────────────────
+四、运动下发：绝对位置流水线、32 位字序与 Δ 语义
+────────────────────────────────────────────────────────────────────────────────
+机械臂移动到某行：`app_arm.c` → move_joints_to_row → AppMotor_GotoAbsTargetAsRelative。
+
+步骤（对每个电机独立）：
+  1）从 Matrix_Final 取 pulse_motor*_abs，记 TargetAbs。
+  2）FC03 读 SERVO_REG_FB_POS32_START（P0B-07）得到 FeedbackAbs（低字寄存器在前合成 32 位；若无应答则退化 AppMotor_GotoPulse）。
+  3）MCU 语义上计算 Δpulse = TargetAbs - FeedbackAbs（有符号）。
+  4）FC16 写 SERVO_REG_POS32_START（P10-14→0x100E）：
+       · CFG_SERVO_POS_CMD_IS_REL_DELTA == 0（默认）：写入 TargetAbs（载荷字序：低 16 位寄存器在前）。
+       · CFG_SERVO_POS_CMD_IS_REL_DELTA != 0：写入 Δpulse，务必与驱动说明书一致。
+  5）FC06 SERVO_REG_ENABLE，SERVO_VAL_ENABLE_ON（507）。
+  6）FC06 SERVO_REG_TRIGGER，SERVO_VAL_TRIGGER_ABS_MOVE（3）。
+  7）AppMotor_WaitPosition：FC03 轮询
+       · SERVO_REG_REACH_STATUS（P0B-04）Bit0=1，或
+       · FeedbackAbs 与 TargetAbs 误差绝对值 ≤ SERVO_TARGET_TOL_PULSE（默认 10 脉冲），
+       任一成立即到位。
+  8）FC06 SERVO_REG_TRIGGER，SERVO_VAL_TRIGGER_CLEAR（0），清除本次总线控制指令。
+
+梯形速度曲线在伺服驱动器侧；F407 不下曲线。
+
+回基点：`AppArm_GoHome` 令两轴 `AppMotor_GotoPulse` 到 `app_calibration_params.h` 中 CALIB_JOINT1_ZERO_PULSE / CALIB_JOINT2_ZERO_PULSE；
+传送带 FL4/FL5/FL6 前的回避与其它调用仍通过既有入口触发。
+
+
+────────────────────────────────────────────────────────────────────────────────
+四点五、板载 KEY1 / KEY2（RS485 与 RGB）及软件 ESTOP 能力
+────────────────────────────────────────────────────────────────────────────────
+共性：KEY1 PA0 EXTI0、KEY2 PC13 EXTI13，下降沿；ISR 仅锁存，main.c 里 EXTI_PopKey1 / EXTI_PopKey2。
+
+· KEY1：`AppArm_GoHome()` — 两轴 `AppMotor_GotoPulse` 至 `CALIB_JOINT*_ZERO_PULSE`（见第五节「回基点」），
+  即通过 RS485 回 MCU 标定的机械零点（基座标原点语义）。随后 `AppIndicator_SetState(APP_IND_OK_HOLD)` → 板载 RGB **绿色**；
+  RunFlag `KEY1 HOME`。（GoHome 当前不向 Alarm 回报单轴失败，与 main.c 一致。）
+
+· KEY2：`ModbusMaster_SendRawBlocking(g_demo_key2_modbus_pdu, …)`，完整 RTU 含 CRC（默认 `03 06 00 C2 00 11 E9 D8`，与报警灯演示寄存器对齐）。
+  成功：`AppIndicator_SetState(APP_IND_ARM_RUN)` → 板载 RGB **蓝色**；RunFlag `KEY2 RAW TX`。失败：`KEY2 err:ErrTag` 写入 Alarm 行。
+  预制帧修改见 `demo_modbus_frames.h` 内 `g_demo_key2_modbus_pdu`，改 PDU 须重算 CRC16。
+
+· 软件急停（与板载 KEY 解耦）：`AppSort_RequestEstop` 仍为已实现 API，**当前工程内无板载按键直接调用**（运动中止轮询 `AppMotionAbort_PollEscalate` 仅认急停闭锁标志）。
+  若被调用：`RequestEstop` → `BSP_Actuators_AllSafe` → 两轴 FC06 SERVO_REG_ENABLE=OFF(511) → FC06 SERVO_REG_ESTOP_MODE=ON(1)；
+  主状态 ESTOP，Start 被闭锁直至 `AppSort_RequestClearFault`。
+· ESTOP 期间：`AppSort_Poll` 每 SERVO_POS_POLL_MS FC03 读两轴 P0B-07，缓存供 `AppSort_GetEstopMonitoredPositions` 与主页 Servo 行 `EPos:` 显示。
+· ClearFault：两轴 FC06 P0D-08=0（ClearTrigger）、P0D-05=0（急停模式关），执行器安全态，回 IDLE。
+
+
+────────────────────────────────────────────────────────────────────────────────
+五、通用「按顺序搬运」程序（与 app_sort 策略对齐的高层抽象）
+────────────────────────────────────────────────────────────────────────────────
+输入：
+  · src_tray_id：整数 1..3，要从哪号盘拿走苗。
+  · dst_tray_id：整数 1..3，要放到哪号盘空穴。
+  · class_want ：整数 1 或 2，要移动的苗类别（本工程语义见 app_sort 各 FL 分支）。
+输出 Flag（本节用「语义名」映射到 AppArm_PickPlace 返回码）：见第六节表。
+
+抽象步骤（必须与 geom_ok / 分拣标志一致）：
+  1）若几何未就绪：AppMatrix_AllRowsGeomValid 或 TrayHasClassWithGeom 等失败 → 不产生动作。
+  2）矩阵行检索：
+       idx_src = FindFirstRowByTrayClass(src_tray_id, class_want)，要求 geom_ok=1。
+       idx_dst = FindFirstEmptyOnTray(dst_tray_id)，要求 geom_ok=1。
+       任一失败 → Flag=row_bad 或等价「未找到」（见 app_sort 内部判断）。
+  3）搬运执行：AppArm_PickPlace(idx_src, idx_dst)。
+       · 两段 move_joints_to_row（源、目标）。
+       · 夹爪/气缸 valve_pick_sequence / valve_place_sequence。
+       · 成功后 AppMatrix_ApplyTransfer：交换 class_id（仅类别列；不重新扫描全表逆解）。
+  4）返回值 0 表示整条链 OK；否则见第六节。
+
+────────────────────────────────────────────────────────────────────────────────
+「完成标志 Flag」最直接对应：AppArm_PickPlace / move_joints_to_row / Modbus 的复合结果。
+app_sort 里还会把返回值格式化成 ARM FLx eNN（见第七节）。
+
+
+────────────────────────────────────────────────────────────────────────────────
+六、机械臂返回值表（AppArm_PickPlace 与内部 move）
+────────────────────────────────────────────────────────────────────────────────
+AppArm_ResultText(code) → 字面（LCD 后缀 eNN 里 N N 为该十进制字节）
+
+  0  OK              全流程成功；矩阵已通过 AppMatrix_ApplyTransfer。
+  1  row_bad         AppMatrix_GetRow 失败（行索引异常）。
+  2  src_m1          源点位电机 1 Modbus/Goto 失败。
+  3  src_m2          源点位电机 2 Modbus/Goto 失败。
+  5  dst_m1          目标点电机 1 …（若在目标段从 88/89 改写会 +3，见源码）。
+  6  dst_m2          目标点电机 2 …
+  7  src_geom        源行 geom_ok==0（逆解不可用）。
+  8  dst_geom        目标行 geom_ok==0。
+  9  xfr_fail        ApplyTransfer 失败（矩阵索引与上层不一致）。
+ 10  dst_3p7 ..      传送带预留/其它分支占位（见源码 switch）。
+ …  详见 app_arm.c 中 default 与其它 case。
+
+中止类（急停链路打断 servo Wait）：
+  88 / 89 源段电机 1/2；91/92 目标段等价（源码 +3）。
+
+取放阀中断：
+  86 pick_stop （夹爪下降/夹紧/升起阶段）。
+ 87 place_stop
+
+
+────────────────────────────────────────────────────────────────────────────────
+七、分拣状态 app_sort（FL）与告警文本
+────────────────────────────────────────────────────────────────────────────────
+· s_sys_run_flag：FL2/FL3… 决定在 SORTING 下走哪一条「找来源盘 + 找目标空穴」的逻辑。
+· 若 AppArm_PickPlace 非 0：enter_fault_mode 把文本格式化为 ARM FLx eNN，
+  Fault 行为见源码（可能锁分拣或要求复位）。
+
+Matrix 相关告警常见前缀：
+  MAT:、TCP:、geom:WAIT/BAD——见主页第 9 行拼接（app_display.c）。
+
+
+────────────────────────────────────────────────────────────────────────────────
+八、Modbus Master 错误编码（伺服移动失败时可能出现）
+────────────────────────────────────────────────────────────────────────────────
+参见 modbus_master.h：TIMEOUT CRC SLAVE FC BUF ARG BUSY EXCEPTION LEN ABORT；
+屏上缩写 TO/CRC… 等在 ModbusMaster_ErrTag。
+
+
+────────────────────────────────────────────────────────────────────────────────
+九、主页 LCD 中与矩阵相关的词
+────────────────────────────────────────────────────────────────────────────────
+RAW: chk= OK/BAD/-- ；n= Raw 行快照数。
+FINAL: OK/BAD/--  x/N  ：有效行计数与期望值。
+geom：-- / WAIT / OK / BAD  — Dirty/Flush 后全行 geom_ok。
+Final 滚动行（主页 10～17 行窗口，共 8 行）：`r{t} t{t} c{col}|{row}|{cls} P:p1|p2` ，p1 p2 = pulse_motor*_abs。
+底栏触摸：逻辑分辨率 800×480 时，屏底 48px 对应 `y≥432`（见 app_display `APP_BOTTOM_Y`）；若底栏全无反应，先核对 `LCD_SCAN_MODE` 与 `LCD_X/Y_LENGTH` 是否仍为 800×480。
+
+
+────────────────────────────────────────────────────────────────────────────────
+十、正常数据「从 TCP 到运动」逐步走一遍（无人工干预）
+────────────────────────────────────────────────────────────────────────────────
+  上位机发来合法帧 START + N 数据行 + END + tray_total=3。
+  └→ BODY 各行 checksum OK；END 对上；declared_rows==received。
+  └→ tray_total==3 OK。
+  └→ AppMatrix_SetFromTcpParser 通过满格或稀疏语义校验矩阵。
+  └→ s_geom_dirty=1；下一轮 Poll FlushPendingGeometry 调 recompute_geom。
+       每成功行填入 Xw/Yw θ* pulse*_abs ，geom_ok=1。
+  └→ app_sort RUN+SORTING+FL… 选定 src/dst idx。
+  └→ AppArm_PickPlace：
+       move_joints_to_row(src)：
+         GotoAbsTargetAsRelative(m1,target1) ：读 Feedback1，写绝对目标（低字在前），Enable，Trigger=3，Wait，Clear；
+         GotoAbsTargetAsRelative(m2,target2) … 
+       valve_pick_sequence（节拍宏：global_config.h CFG_ARM_PICK_*，调用 app_arm.c）
+       （CFG_ARM_PICK_TO_MOVE_MS）后再 move_joints_to_row(dst)：同上
+       valve_place_sequence
+       ApplyTransfer ：源 class→0 ，目标写入 class。
+
+
+────────────────────────────────────────────────────────────────────────────────
+十一、「事实上的百分之百信心」做不到的诚实说明与漏洞闭环表
+────────────────────────────────────────────────────────────────────────────────
+无法用静态文字宣称「绝对无风险」。下面列出残余风险→修复/验证：
+
+  checksum / tray_total / 行列 1 基
+    风险：上位机少行、tray_total 错、列号越界仍可能早失败。
+    修复：屏显 Alarm 字面 + Raw 快照对照；回放固定帧脚本。
+    验证：篡改 END 校验和应拒绝整帧；tray≠3 清零。
+
+  五杆 IK 分支（肘方向启发式）
+    风险：选错两支导致翻折撞到机构。
+    修复：多点示教复核；必要时加 θ 软限幅；连续性过滤。
+    验证：固定测试点正反走小步观察。
+
+  驱动器寄存器语义（绝对 vs Δ）
+    风险：误以为写 Δ 却仍按绝对伺服解释。
+    修复：仅以手册为准切换 CFG_SERVO_POS_CMD_IS_REL_DELTA；首测低速短行程。
+    验证：离线读寄存器波形；Δ 正负与实机旋转方向一致后再放大。
+
+  反馈读失败退化 GotoPulse(TargetAbs)
+    风险：无反馈仍写绝对寄存器可能与预期不同（通常仍可工作）。
+    修复：在读失败计数超阈值上报 Fault。
+    验证：拔掉编码器线缆应报错并停止策略。
+
+  ApplyTransfer 不刷新几何
+    风险：空穴行上的 pulse 仍为旧空穴姿态；下一次仍按旧脉冲走（同类逻辑搬运一般可接受）。
+    修复：若业务要求「搬后空穴也要更新脉冲」需局部重算或整表 Flush。
+    验证：搬运后目视动作是否仍可接受。
+
+
+────────────────────────────────────────────────────────────────────────────────
+十二、FAQ
+────────────────────────────────────────────────────────────────────────────────
+Q：为何 Final 里是「绝对」脉冲却还谈「相对」？
+A：绝对脉冲是上层规划语义（与零点标定一致）；相对 Δ 是当前反馈到目标之差；
+   默认驱动仍接收绝对寄存器写入，MCU 只是把 Δ 显式算出以便核查与扩展到纯增量伺服。
+
+Q：为何不直接把脉冲给上位机在 TCP？
+A：上位机不负责五杆 IK 与伺服减速比折算；MCU 才是真源。
+
+
+文档结束。
+

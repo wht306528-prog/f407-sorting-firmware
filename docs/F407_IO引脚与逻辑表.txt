@@ -1,0 +1,46 @@
+================================================================================
+  F407 分拣 — IO/RS485 引脚与逻辑（真源：Project/System/global_config.h）
+  板卡：野火 F407；注意 RMII 以太网占用，勿将执行器接到 PHY 相关脚。
+================================================================================
+
+【RS485 主站总线】
+  PA9     USART1_TX    → RS485 DI
+  PA10    USART1_RX    ← RS485 RO
+  PC0     DE/~RE       高=发送，低=接收（与所有从机共用）
+  波特率  CFG_RS485_BAUD（默认 115200）
+
+【RMII 以太网（勿占用）】
+  典型：PA1 REF_CLK、PA2 MDIO、PA7 CRS_DV、PC4/PC5 RXD、PB11 TX_EN、PG13/14 TXD 等。
+  不要将电磁阀/第二路 USART2 RS485 接到与 RMII 冲突脚位。
+
+【LCD / 触摸（现有驱动）】
+  NT35510 FSMC：见 bsp_nt35510_lcd
+  GT911：PD7 SCL、PD3 SDA、PD6 RST、PG8 INT（软件 I2C）
+
+【按键】
+  KEY1   PA0 / EXTI0    下降沿：AppArm_GoHome（两轴 RS485 回零点），RGB 绿灯（APP_IND_OK_HOLD）
+  KEY2   PC13 / EXTI13  下降沿：SendRaw 预制帧 `03 06 00 C2 00 11`+CRC（见 demo_modbus_frames.h），RGB 蓝灯（APP_IND_ARM_RUN）
+
+【执行器与传感器（global_config.h 默认）】
+  功能              宏前缀              引脚    备注
+  ----------------  ------------------  ------  ---------------------------------
+  升降电磁阀        VALVE_ACTUATOR_Z    PA8     推挽输出，高=开
+  吸盘/夹爪         VALVE_GRIP          PB2     推挽输出，高=开
+  传送带电机 0      CONV_MOTOR_0        PB0
+  传送带电机 1      CONV_MOTOR_1        PB12
+  传送带电机 2      CONV_MOTOR_2        PE5
+  光电 0            PHOTO_0             PB13    注释：默认低电平触发
+  光电 1            PHOTO_1             PB15
+  光电 2            PHOTO_2             PE3
+  软限位占位        LIMIT_SOFT1         PE4     有效电平依外部电路
+  急停占位          ESTOP               PE6     硬件占位；软件急停 API 见 AppSort_RequestEstop（当前不由板载 KEY2 触发）
+
+【Modbus 从站号/寄存器摘要（示例驱动器，以现场手册为准）】
+  电机 1/2：CFG_MODBUS_SLAVE_MOTOR1 / CFG_MODBUS_SLAVE_MOTOR2
+  伺服寄存器：SERVO_REG_ENABLE、SERVO_REG_TRIGGER、SERVO_REG_POS32_START、
+              SERVO_REG_FB_POS32_START（见 global_config.h）
+  报警灯：CFG_ALARM_MODBUS_SLAVE，寄存器 CFG_ALARM_REG_DIRECT，FC06
+
+================================================================================
+  若与本表不符，以原理图与 global_config.h 修改为准；同步更新 F407_维护说明.txt。
+================================================================================
