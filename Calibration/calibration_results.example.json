@@ -1,0 +1,54 @@
+{
+  "_comment": "与 calibration_results.json 同结构示例；可复制后改名或在 CI 中联调",
+  "generated_by": "example",
+  "camera": {
+    "fx": 608.356,
+    "fy": 607.887,
+    "cx": 323.566,
+    "cy": 246.759,
+    "width": 640,
+    "height": 480,
+    "D": [0.0, 0.0, 0.0, 0.0, 0.0]
+  },
+  "extrinsic_board_to_cam": {
+    "R": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    "t_mm": [0.0, 0.0, 300.0]
+  },
+  "tray_from_cam": {
+    "R": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    "t_mm": [0.0, 0.0, 0.0]
+  },
+  "T_tray_to_arm": [
+    [1.0, 0.0, 0.0, 250.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0]
+  ],
+  "arm": {
+    "ax_mm": -250.0,
+    "ay_mm": 0.0,
+    "bx_mm": 250.0,
+    "by_mm": 0.0,
+    "L_active_left_mm": 600.0,
+    "L_passive_left_mm": 700.0,
+    "L_active_right_mm": 600.0,
+    "L_passive_right_mm": 700.0,
+    "L1_mm": 600.0,
+    "L4_mm": 600.0,
+    "joint1_zero_deg": 0.0,
+    "joint2_zero_deg": 0.0,
+    "joint1_zero_pulse": 0,
+    "joint2_zero_pulse": 0,
+    "joint1_sign": 1.0,
+    "joint2_sign": 1.0
+  },
+  "conveyor": {
+    "mm_per_pulse": 0.0,
+    "delta_pulse_for_test": 0
+  },
+  "quality": {
+    "max_error_mm": 3.0,
+    "verify_mean_mm": null,
+    "verify_max_mm": null
+  }
+}

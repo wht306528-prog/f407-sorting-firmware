@@ -15,3 +15,12 @@ build_log.txt
 ../TEST/Target/Project/Objects/
 ../TEST/Target/Project/Listing/
 **/*/Output/
+
+# Calibration local outputs
+Calibration/__pycache__/
+Calibration/**/*.pyc
+Calibration/calibration_config.json
+Calibration/calibration_results.json
+!Calibration/output/
+Calibration/output/*
+!Calibration/output/.gitkeep

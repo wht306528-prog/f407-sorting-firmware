@@ -1,0 +1,280 @@
+================================================================================
+  分拣设备 — 安装后标定流程（详尽版）
+  工程路径：sorting_device/Calibration/
+  文档版本：配合 calibrate_device.py / apply_calibration_to_f407.py / F407 矩阵协议
+================================================================================
+
+【◇、Calibration 目录只有两个 Python 程序】
+  · ① 标定与结果 JSON：始终在 Calibration/ 下运行
+          python calibrate_device.py …
+      子命令通常顺序：###solve-board → merge-patch → fit-tray → fit-arm → verify###
+      也可用 ###one-table### 一键串联「多图择优外参 + 总表 fit-tray / fit-arm / verify」（见下文 ★★）。
+      每一步终端会打印摘要与「下一步建议」；结果被写入 calibration_results.json。
+      solve-board 在本程序内完成棋盘角点与 solvePnP（需 opencv-python），无单独的 solve_board_pose.py。
+  · ② 更新固件参数头文件：
+          python apply_calibration_to_f407.py ^
+              --config calibration_config.json ^
+              --results calibration_results.json [--apply]
+      不写 --apply 时完整 .h 内容在 stdout（可重定向），校验摘要在 stderr；
+      写盘前会校验 JSON 必填结构，缺字段将报错中止（可加 --force 跳过校验，不推荐）。
+  · calibration_results.json 必须使用现场触点/观测/外参合并后的数据；仓库自带文件多为模板演示，勿直接当真机标定终稿。
+
+【★、现场五步速查 — 记不住细节时先看这里】
+  均在 Calibration/ 目录执行；依赖 pip install numpy opencv-python。
+  下列步骤中的子命令形如：python calibrate_device.py <子命令> …（与上文「◇」一致）。
+  （1）填相机参数
+        复制 calibration_config.example.json → calibration_config.json，
+        填写 camera.K、camera.D、宽高；内参重做见第四节 / 第五节。  已完成
+  （2）拍 GP100 外参图并写入 results
+        solve-board → 选最优一张图产的 JSON → merge-patch 并入 calibration_results.json。
+        （触点拍照见第六节；本节只要求棋盘图清晰、P00/X+/Y+ 约定与第三节一致。）
+        GP100 是不是放在“横的左下角”？
+重点不是“图像左下角”，而是你自己定义的 P00 / X+ / Y+。
+
+文档里说：
+
+GP100 是 12×9 方格。
+OpenCV 用的是 内角点，数量是 11×8。
+第一个内角点叫 P00。
+X+ 是列号增加方向。
+Y+ 是行号增加方向。
+也就是说，你要在标定板上实际做标记：
+P00 = 第 0 列、第 0 行那个内角点
+X+  = 从 P00 往右数第 1、2、3...列的方向
+Y+  = 从 P00 往上/往下数第 1、2、3...行的方向
+它可以横放，也可以竖放，但必须满足：
+
+你拍照时的 P00 / X+ / Y+，和你后面填触点 CSV 时的 corner_col_idx / corner_row_idx 是同一套方向
+
+  （3）填触点 CSV 并拟合装盘→臂（**高级排错用**；现场推荐直接走下文 ★★ one-table 总表）
+        自建 data/tray_arm_points.csv 后运行 fit-tray（仓库不再附带该示例文件）。
+        需要关节观测时再自建 data/joint_observations.csv 并运行 fit-arm。
+  （4）复测验收（**高级排错用**；一表流请用总表里 role=verify）
+        自建像素复测 CSV 后运行 verify；须显式指定 --csv（写回 quality.verify_*；超阈值退出码为 2）。
+  （5）写 F407
+        python apply_calibration_to_f407.py --config calibration_config.json ^
+            --results calibration_results.json --apply
+        （或 python calibrate_device.py apply-f407 --apply）；再 Keil 编译烧录。
+
+【★★、最短路径：one-table（一表流 / Boot Zero）】
+  **现场两件事：**① 拍 4～5 张 GP100 外参图放入 Calibration/images/extrinsic/（.jpg/.jpeg/.png）；
+  ② 填写总表 data/calibration_points.csv（可复制 calibration_points.example.csv）。相机支架勿再移动。
+
+  适用于：已知相机内参（calibration_config.json），GP100 平铺在实际苗盘工作面；触点时用末端对准 GP100
+  内角交叉点，同一触点记录臂基坐标下的末端 XYZ + 两路伺服当前绝对脉冲。
+
+  （A）拍摄要求：棋盘清晰、角点完整；多张均在真实苗盘工作面、同一套 P00/X+/Y+（见下段与第三节）；脚本会打印
+      「最佳外参图」路径与 board_corners_best.png，务必人工核对并非偶然姿态。
+
+  （A′）**「同一套 P00/X+/Y+」到底是什么？触点写进表格要选哪几条交界？**
+    · **与相机预览图左转右转无关**。必须在 GP100 **实物板材**上用胶带/笔在图案外沿用箭头标死：
+          P00（第一个内角交叉点）、X+（列号增加方向）、Y+（行号增加方向）。
+      拍照、机械臂触点、填 calibration_points.csv 时，**角点 (列,行) 必须读同一套标记**。
+    · OpenCV 内角点共 **11×8**：**corner_col_idx = 0…10**（沿 X+），**corner_row_idx = 0…7**（沿 Y+）。
+      总表若用角点两列，脚本按 tray_x_mm = col × square_mm、tray_y_mm = row × square_mm（默认 6 mm）。
+    · **机械臂触点位置**：每条记录对应「末端工具中心抵在 GP100 **黑白格之间的内角交叉点**」，不是苗盘培育孔，
+      也不是照片上随便一点；触点瞬间读臂控 X/Y/Z 与两路伺服脉冲。
+    · **推荐的现场方向约定（把“靠近底座”的一边写清楚）**：站在机械臂**底座一侧**，面朝平放在工作面上的 GP100。
+      把「离你最近的这一排内角交叉点」定为 **corner_row_idx = 0（底行）**。从你**左手到右手**为列号增大（X+）：
+          底行最左内角 = **(col=0, row=0)**，底行最右内角 = **(col=10, row=0)**。
+      往**远离底座**方向走一排，行号 +1；最上一排为 **row=7**，左上角 **(0,7)**，右上角 **(10,7)**。
+    · **建议你填进 fit 表的角点示例**（角点多时不必全触，但至少 3 组不共线，推荐 5 点摊开）：
+        corner_col_idx,corner_row_idx  建议你写在 note 里的叫法（仅备注，仍以两列数字为准）
+        0,0                             底靠底座、最左内角交叉点 → 常说 **P00**（与第三节 P00 同一个点）
+        10,0                            底靠底座、最右内角交叉点 → 可记 **P10r0**（列 10、行 0）
+        0,7                             远离底座侧、最左 → **P0r7**
+        10,7                            远离底座侧、最右 → **P10r7**
+        5,4                             图案区域中心附近 → **P5r4**
+      若你现场把板子横过来放，只要 **胶带箭头与表中 col/row 一致**，不必和「左/右」文字死磕；
+      **关键是：外拍照、触点、CSV 三套数据读同一套 P00/X+/Y+。**
+
+  （B）复制 data/calibration_points.example.csv → data/calibration_points.csv，按上款与第三节约定填写：
+        · role=fit：参与拟合（至少 3 组有效且不共线）。
+        · corner_col_idx,corner_row_idx（0…10 / 0…7）或 tray_x_mm,tray_y_mm[,tray_z_mm]。
+        · x_arm_mm,y_arm_mm,z_arm_mm：臂基坐标系下末端工具中心 mm。
+        · servo1_abs_pulse,servo2_abs_pulse：触点瞬间读到的绝对脉冲（填写则自动换算关节角并 fit-arm）。
+        · role=verify：不参与拟合；若有 u_px,v_px,z_mm 可走全长像素流水线验收；若无像素列，脚本会用 tray 角点
+          与外参 **反投影** 得到合成 u,v,z_c 再走像素链（quality.one_table_verify_modes 含 backproj_pixel）；
+          若 OpenCV 不可用或几何退化则退回仅用 T_tray_to_arm 验 XY（tray_xy）。
+
+  （C）一条命令示例（默认 --points=data/calibration_points.csv；目录参数可用 --images-dir 或别名 --images）：
+        cd Calibration
+        python calibrate_device.py one-table --config calibration_config.json --results calibration_results.json ^
+            --points data/calibration_points.csv --images images/extrinsic
+
+        常用可选参数：
+          --images-dir … / --images …（等价） / --points … / --output-dir …（默认 output）
+          --pulse-per-rev 10000 --motor-ratio 30（与固件 SERVO_PULSE_PER_360_REV、CFG_ICHUANDONG_RATIO 对齐）
+          --joint1-zero-pulse / --joint2-zero-pulse（关节零位脉冲偏置；默认读 results.arm 或 0）
+          --joint1-sign / --joint2-sign
+          --l1 / --l4（覆盖主动杆长 mm）、--scipy（fit-arm 精修）、--skip-verify（跳过 verify 行）
+          --fit-arm-max-rms-deg（默认 35：fit-arm 后若 rms_joint_deg 超限则中止；≤0 关闭检查）
+
+  脚本行为摘要：
+    · 扫描外参目录，按棋盘平均重投影误差选最优图，写入 tray_from_cam 等到 results；留痕
+      output/extrinsic_best_fragment.json、output/board_corners_best.png。
+    · 拟合 T_tray_to_arm；若 fit 行含双路脉冲则生成 output/joint_observations_one_table.csv 并自动 fit-arm。
+
+  脉冲换算（与脚本 pulses_to_meas_joint_deg 一致）：
+        meas_theta_deg = (servo_abs_pulse - joint_zero_pulse) * 360 / pulse_per_rev / motor_ratio * sign
+
+  【Final 矩阵与断电 — 务必区分 MCU 与伺服】
+    · MCU RAM 内的 Raw/Final 分拣矩阵：本轮上电有效；断电清空后不得复用上一份 Final。
+      重新上电后须由上位机重新下发 Raw（或等价流程），固件按当前标定参数重算 Final。
+    · Final 末两列若为「绝对目标脉冲」，其语义相对于本次会话建立的脉冲零点 / 驱动器当前计数基准。
+    · 若电机驱动器具备跨断电绝对位置记忆，伺服计数可能在断电后仍连续；这与「MCU 里矩阵缓存丢了」是两回事：
+      前者有助于物理位姿一致，后者仍要求不要把旧 Final 当持久真理。
+
+  【一次标定能长期用的前提】
+    写入 Flash/JSON 的长期量是：相机内参、tray_from_cam、T_tray_to_arm、五杆几何与关节零偏等。
+    前提是每次上电的脉冲零点与物理姿态契约一致（推荐机械回零后再采 zero_pulse；或固定治具位且不易被动；
+    或依赖真绝对编码且软件不误清零）。否则应先排查回零/符号再重新触点。
+
+【〇、误差能消掉吗？】
+  · 不能完全“去掉”机械装配间隙、相机噪声、末端执行器重复定位误差。
+  · 可把固定安装误差集中到标定参数里，用软件修正到可接受精度。
+  · 最终在 calibration_results.json 的 quality.verify_mean_mm / verify_max_mm
+    等处体现残余误差。
+
+【一、标定链路在 F407 里怎么用】（见源码 app_kinematics.c）
+  3588 每穴： tray_id,col,row,class_id,confidence,u,v,z(mm)  （col/row 下发为 **1..5 / 1..10**；小数按固件解析后取整）
+        → UV 射线 × 苗盘平面（tray_from_cam + T_tray_to_arm）得臂平面 Xw,Yw
+        → **对称五连杆**正/逆解得命令角与绝对脉冲（见 app_matrix / app_arm）
+  · 空穴 class_id=0 仍可带 u,v,z；若几何不可达则 geom_ok=0，分拣不得盲走。
+
+【二、目录与文件名（请将照片和数据按此放好）】
+  Calibration/images/intrinsic/     … 重做相机内参时用（10～20 张）
+  Calibration/images/extrinsic/   … GP100 平放在苗盘工作面上拍的外参照片
+  Calibration/images/verify/        … 复测点时保留的截图/照片（可选）
+  Calibration/data/
+      calibration_points.csv      … **推荐** one-table 总表（现场主流程；见 ★★）
+      calibration_points.example.csv … 总表示例模板（可复制改名后填实测）
+      （以下仅高级排错/分步标定时 **自建**，仓库不再附带示例 CSV）
+      tray_arm_points.csv         … fit-tray 用触点表
+      joint_observations.csv      … fit-arm 用关节观测
+      verify_points.csv            … verify 子命令用像素复测表（须运行 verify 时 **--csv** 指定）
+  Calibration/output/
+      corners_extrinsic_* .png / extrinsic_patch.json … 脚本输出可视化与 JSON 片段
+  Calibration/calibration_config.json   （由 example 复制后改）
+  Calibration/calibration_results.json    （脚本生成或合并）
+
+【三、GP100（标定板）现场约定 — 非常关键】
+  外形 100×100 mm，方格阵列 12×9，方格边长 6 mm，图案区域约 72×54 mm，
+  OpenCV 内角点 patternSize = (11, 8)。
+
+  【物理原点 P00 — 不靠“相机左上角”】
+    必须用胶带/记号在棋盘图案外侧标明：
+      P00 ：取「第一个内角点」为你的 (列0,行0)
+      X+ ：沿内角点列号增加的方向 = 棋盘长边 72 mm 方向推荐
+      Y+ ：沿内角点行号增加的方向
+
+    OpenCV solvePnP 角点序号与脚本一致：先行 j（0…7）、再列 i（0…10），
+    世界坐标定义为：
+          x(mm) = i * 6.0 ，  y(mm) = j * 6.0 ， z = 0
+
+    「横放」时每盘拍照时都应保持同一套 P00 / X+ / Y+，否则点位列号会与程序不一致。
+
+【四、内参已知时】（推荐：你已知 K,D 就只填配置）
+  1）复制 Calibration/calibration_config.example.json → calibration_config.json
+  2）填写 camera.K、camera.D、width、height。
+  3）可跳过第五节内参采集。
+
+【五、内参重标（仅在需要重做 K,D 时）】
+  数量：拍摄 15 张为宜（不少于 10 张）。
+  内容：棋盘覆盖画面中心、四角、远近、轻度倾斜；无糊图、强光反光、裁剪。
+  格式：JPEG 或 PNG，例 intrinsic_001.jpg … intrinsic_015.jpg
+        放到 Calibration/images/intrinsic/
+  说明：本仓库主流程可把外部标定得到的 K,D 录入 JSON；也可用 OpenCV calibrateCamera
+        离线求参后手动写入 calibration_config.json。
+
+【六、外参：GP100 放在苗盘工作面拍照】
+  · 是否需要机械臂触点？本轮「只要相机拍摄的清晰棋盘图」，用于求 tray_from_cam。
+  · 安装后勿再移动相机支架与三苗盘相对关系。
+
+
+
+  建议张数：
+    · 每只苗盘至少 3 张不同轻微姿态（棋盘平铺、轻拍不翘边），命名例如：
+          tray1_pose_001.jpg … tray003_pose_003.jpg
+      放入 Calibration/images/extrinsic/
+    · 若三盘共面且在同一视野内，可先对中间盘聚焦拍 5 张作主外参，左右盘照片做复检。
+
+  运行（推荐，一步到位带终端提示）：
+    cd Calibration
+    python calibrate_device.py solve-board ^
+        --image images/extrinsic/tray1_pose_001.jpg ^
+        --save-corners output/board_corners_tray1_001.png ^
+        --json-out output/extrinsic_tray1_001_fragment.json
+
+    （solve-board 在本程序内调用 OpenCV；依赖 pip install opencv-python。）
+
+  多张图可多跑几次，选一个重投影观感最好、`findChessboardCorners` 最稳的一张
+  的 R,t patch 并入 calibration_results.json：
+      extrinsic_board_to_cam ， tray_from_cam
+    并入示例：
+      python calibrate_device.py merge-patch output/extrinsic_tray1_best_fragment.json
+
+【七、T_tray_to_arm：触点如何选？】
+  目的：已知苗盘平面点 (x,y,0)_tray ，对应臂基下触点 (x,y,z)_arm 或 joints。
+
+  【不需要触所有格子】
+    每只盘至少 5 点：四角附近各 1 + 中心附近 1，三盘合计约 15 点；
+    绝对下限 ≥ 9 个不共线的内角交叉点。
+  【触点位置】优先触棋盘「内角点交叉」，勿触孔缘；按第三节 P00/X+/Y+ 读 (列号,行号)
+    tray 坐标(mm)： x = col * 6.0 ， y = row * 6.0 ， z = 0
+
+  填表 Calibration/data/tray_arm_points.csv（高级排错时自建；字段同总表角点+臂坐标思路）：
+    corner_col_idx,corner_row_idx,x_arm_mm,y_arm_mm,z_arm_mm
+    或 tray_x_mm,tray_y_mm,x_arm_mm,y_arm_mm,z_arm_mm（直接填 mm）
+
+  【独立验证点】再从每盘多点选 3～5 个未参与上面的点只做测量对比，不写进 CSV。
+
+  一键拟合示例：
+    python calibrate_device.py fit-tray --csv data/tray_arm_points.csv
+
+【八、关节零偏与等效杆长】
+  · 脚本与固件一致的等效两杆逆解骨架：调 L1、L4 与零点。
+  · 数据采集：Calibration/data/joint_observations.csv
+       xw_mm,yw_mm,meas_theta1_deg,meas_theta2_deg,note
+
+  python calibrate_device.py fit-arm --csv data/joint_observations.csv
+
+【九、复测与验收】
+  **一表流**：在 data/calibration_points.csv 里增加 **role=verify** 行即可，随 one-table 一起验收。
+  **高级子命令 verify**：自建复测 CSV，须显式 `--csv` 路径，例如 data/verify_points.csv。
+    列：u_px,v_px,z_mm,x_arm_truth_mm,y_arm_truth_mm,note
+    文件必须存在，且至少一行有效数据（不再有内置隐藏测试点）。
+
+  python calibrate_device.py verify --csv <你的复测.csv>
+  · 写回 results 内 quality.verify_mean_mm / verify_max_mm。
+  · 若 max 误差大于 quality.max_error_mm，脚本退出码为 2（终端显示 FAIL），请先排查再写固件。
+
+【十、写入 F407 头文件】
+  python apply_calibration_to_f407.py ^
+      --config calibration_config.json ^
+      --results calibration_results.json --apply
+
+  生成路径默认见 calibration_config.paths.f407_header_out，常见为：
+      F407/Project/User/calibration/app_calibration_params.h
+  终端 stderr 将打印写入摘要以便核对关键宏。
+
+  · 校验失败时会中止以避免模板/残缺 JSON  silent 写入；仅当确认数据无误可加 --force。
+  · 亦可： python calibrate_device.py apply-f407 --apply [--force]
+
+  然后 Keil 编译烧录。
+
+【十一、传送带（测试阶段占位）】
+  calibration_results.json 中 conveyor.mm_per_pulse 置 0、delta_pulse_for_test 置 0，
+  表示不产生动态补偿；有传送带后再填。
+
+【十二、3588 TCP 矩阵（与 Firmware 对齐）】
+  Matrix TCP 演示脚本已从 Calibration 目录移除；客户端在上位机侧按 F407/docs 协议自行实现。
+  两种均被接受：
+    A）完整占位： START,count=150 + 150 行 + END + **单独一行** tray_total=3（常数等于系统盘位数）
+       （tray_total 不计入 ASCII checksum）。
+    B）稀疏下发： START,count=N + N 行 …（1≤N≤150），同样 END 后与 tray_total=3，
+       各行穴位不重复，仅占实际上有结果的格子。
+  几何：五连杆正/逆解在固件 AppKinematics / app_matrix；连杆与零位脉冲由 fit-arm +
+        apply_calibration_to_f407.py 写入 app_calibration_params.h。
+
+================================================================================

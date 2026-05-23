@@ -1,0 +1,84 @@
+{
+  "_readme": [
+    "复制本文件为 calibration_config.json 后按需修改路径与相机参数；",
+    "JSON 不能有 // 注释，说明性文字放在 _readme / *_comment / _units 字段中。"
+  ],
+  "_photo_layout_comment": [
+    "内参重做：Calibration/images/intrinsic/intrinsic_001.jpg …",
+    "外参：GP100 平放在苗盘工作面，Calibration/images/extrinsic/*.jpg",
+    "现场主流程：data/calibration_points.csv（模板 calibration_points.example.csv）+ one-table",
+    "高级分步排错可自建 tray_arm_points.csv、joint_observations.csv、verify 用像素复测 CSV"
+  ],
+  "camera": {
+    "_units": {
+      "K": "fx,fy,cx,cy in pixels; intrinsic 3x3",
+      "D": "plumb-bob distCoeffs length 5: k1 k2 p1 p2 k3"
+    },
+    "model": "plumb_bob",
+    "width": 640,
+    "height": 480,
+    "K": [
+      [608.356, 0.0, 323.566],
+      [0.0, 607.887, 246.759],
+      [0.0, 0.0, 1.0]
+    ],
+    "D": [0.0, 0.0, 0.0, 0.0, 0.0]
+  },
+  "board_gp100": {
+    "_comment": "图案 12x9 方格 6 mm；OpenCV patternSize = 内角点数 (列, 行)",
+    "squares_cols": 12,
+    "squares_rows": 9,
+    "square_mm": 6.0,
+    "opencv_inner_corners": [11, 8],
+    "outer_size_mm": [100.0, 100.0],
+    "pattern_size_mm_approx": [72.0, 54.0]
+  },
+  "tray_coordinates": {
+    "_comment": "触点用内角点时：x(mm)=corner_colIdx*GP100.square_mm , y=corner_rowIdx*square_mm, z=0；原点 P00 必须与现场标记一致而非相机左上角",
+    "origin": "corner_P00_inside_pattern"
+  },
+  "tray_arm": {
+    "comment_T_tray_to_arm": "苗盘工作平面（Z≈常数）点到机械臂基坐标；4x4 行主序；由 fit-tray CSV 求解后写入 calibration_results.json",
+    "T_tray_to_arm": [
+      [1.0, 0.0, 0.0, 250.0],
+      [0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0]
+    ]
+  },
+  "conveyor": {
+    "_comment": "测试阶段无传送带：两值均置 0；有传送带时再标定 mm_per_pulse",
+    "mm_per_pulse": 0.0,
+    "delta_pulse_for_test": 0
+  },
+  "arm_nominal_mm": {
+    "L0_base": 500.0,
+    "L1_active": 600.0,
+    "L2_passive": 700.0,
+    "L3": 700.0,
+    "L4_end": 600.0,
+    "comment": "apply 脚本在未写五杆从动长度时默认 L_passive*=L2_passive；连杆几何与对称五杆见 calibration_results.arm"
+  },
+  "quality": {
+    "max_error_mm": 3.0,
+    "_comment": "验收阈值；quality.verify_* 由 one-table（role=verify）或 verify 子命令写入 results"
+  },
+  "paths": {
+    "_comment_relative_to": "Calibration/ 目录",
+    "_paths_note": [
+      "one-table 现场主流程：calibration_points_csv；分步 verify 须提供自建 CSV（verify --csv）。"
+    ],
+    "intrinsic_images_dir": "images/intrinsic",
+    "extrinsic_images_dir": "images/extrinsic",
+    "verify_images_dir": "images/verify",
+    "data_dir": "data",
+    "output_dir": "output",
+    "board_image_for_solvepnp": "images/extrinsic/tray1_pose_001.jpg",
+    "calibration_points_csv": "data/calibration_points.csv",
+    "tray_arm_points_csv": "data/tray_arm_points.csv",
+    "joint_observations_csv": "data/joint_observations.csv",
+    "verify_points_csv": "data/verify_points.csv",
+    "calibration_results_out": "calibration_results.json",
+    "f407_header_out": "../F407/Project/User/calibration/app_calibration_params.h"
+  }
+}

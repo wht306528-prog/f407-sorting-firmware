@@ -1,0 +1,7 @@
+role,corner_col_idx,corner_row_idx,x_arm_mm,y_arm_mm,z_arm_mm,servo1_abs_pulse,servo2_abs_pulse,note
+fit,0,0,250.0,0.0,0.0,123456,223456,P00 base-side left-inner-corner col0_row0 tray_xy_0_0
+fit,10,0,310.0,0.0,0.0,125123,221900,P10r0 base-side right-inner-corner col10_row0 tray_xy_60_0
+fit,0,7,250.0,42.0,0.0,124050,222050,P0r7 far-from-base left col0_row7 tray_xy_0_42
+fit,10,7,310.0,42.0,0.0,125200,221800,P10r7 far-from-base right col10_row7 tray_xy_60_42
+fit,5,4,280.0,24.0,0.0,124500,222500,P5r4 center-near col5_row4 tray_xy_30_24
+verify,3,6,272.0,36.0,0.0,124300,222200,independent_verify col3_row6 not_used_in_fit
