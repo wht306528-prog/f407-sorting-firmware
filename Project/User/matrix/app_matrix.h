@@ -59,6 +59,16 @@ typedef struct
 	int32_t  ik_err;
 } AppMatrixGeomDiag_t;
 
+typedef struct
+{
+	uint16_t total_count;
+	uint16_t empty_count;
+	uint16_t white_count;
+	uint16_t yellow_count;
+	uint16_t invalid_count;
+	uint8_t  complete;
+} AppMatrixTrayStats_t;
+
 void AppMatrix_Clear(void);
 
 uint16_t AppMatrix_GetValidCount(void);
@@ -86,6 +96,9 @@ uint8_t AppMatrix_TrayPresence(uint8_t *mask);
  *         255=保留（内部未使用）
  */
 uint8_t AppMatrix_CheckTrayFullOrEmpty(uint8_t tray_id, uint16_t cols, uint16_t rows);
+
+uint8_t AppMatrix_GetTrayClassStats(uint8_t tray_id, uint16_t cols, uint16_t rows,
+				    AppMatrixTrayStats_t *out);
 
 /** 三盘 mask 是否均为 1（mask==0x07） */
 uint8_t AppMatrix_AllThreeTraysPresent(void);

@@ -1216,23 +1216,6 @@ void AppDisplay_LogRs485Summary(uint8_t is_tx, uint8_t slave, uint8_t fc,
  * 功能：将托盘枚举码转成屏显词（OK/ERR）。
  * 交互：compose_screen_main Tray 行。
  */
-static const char *tray_tray_word(uint8_t code)
-{
-	if (AppMatrix_GetValidCount() == 0u)
-	{
-		return "--";
-	}
-	if (code == 44u)
-	{
-		return "ERR";
-	}
-	if (code <= 2u)
-	{
-		return "OK";
-	}
-	return "?";
-}
-
 /*
  * 功能：简述矩阵几何是否已 Flush / 有效。
  * 交互：分界线摘要行。
@@ -1320,21 +1303,21 @@ static void compose_final_scroll_block(uint32_t tick_ms)
  */
 static void compose_screen_main(uint32_t tick_ms)
 {
-	uint8_t                   t1 = AppMatrix_CheckTrayFullOrEmpty(
-	    1u, MATRIX_TRAY_COLS, MATRIX_TRAY_ROWS);
-	uint8_t                   t2 = AppMatrix_CheckTrayFullOrEmpty(
-	    2u, MATRIX_TRAY_COLS, MATRIX_TRAY_ROWS);
-	uint8_t                   t3 = AppMatrix_CheckTrayFullOrEmpty(
-	    3u, MATRIX_TRAY_COLS, MATRIX_TRAY_ROWS);
+	AppMatrixTrayStats_t      t1s;
+	AppMatrixTrayStats_t      t2s;
+	AppMatrixTrayStats_t      t3s;
 	const ModbusTxnResult_t  *lr = ModbusMaster_GetLastResult();
 	char                      servo_suffix[36];
+	char                      tray_line[APP_UI_LINE_CAP];
 	AppMatrixModbusDiag_t     md;
 	const char               *mb_fin;
 	const char               *final_st;
 	const char               *rdst;
+	uint16_t                  valid_count;
 
 	(void)tick_ms;
 	AppMatrixModbus_GetDiag(&md);
+	valid_count = AppMatrix_GetValidCount();
 
 	switch (md.read_status)
 	{
@@ -1404,17 +1387,49 @@ static void compose_screen_main(uint32_t tick_ms)
 	(void)snprintf(s_scr[4], sizeof(s_scr[4]),
 		       "RunFlag: %s", s_runflg);
 
-	(void)snprintf(s_scr[5], sizeof(s_scr[5]),
-		       "Tray T1=%s T2=%s T3=%s",
-		       tray_tray_word(t1), tray_tray_word(t2),
-		       tray_tray_word(t3));
+	(void)AppMatrix_GetTrayClassStats(1u, MATRIX_TRAY_COLS,
+					  MATRIX_TRAY_ROWS, &t1s);
+	(void)AppMatrix_GetTrayClassStats(2u, MATRIX_TRAY_COLS,
+					  MATRIX_TRAY_ROWS, &t2s);
+	(void)AppMatrix_GetTrayClassStats(3u, MATRIX_TRAY_COLS,
+					  MATRIX_TRAY_ROWS, &t3s);
+	if (valid_count == 0u)
+	{
+		copy_trim(tray_line, sizeof(tray_line), "Tray --");
+	}
+	else if (t1s.complete == 0u || t2s.complete == 0u || t3s.complete == 0u)
+	{
+		(void)snprintf(tray_line, sizeof(tray_line),
+			       "Tray ERR T1=%u/%u T2=%u/%u T3=%u/%u",
+			       (unsigned)t1s.total_count,
+			       (unsigned)(MATRIX_TRAY_COLS * MATRIX_TRAY_ROWS),
+			       (unsigned)t2s.total_count,
+			       (unsigned)(MATRIX_TRAY_COLS * MATRIX_TRAY_ROWS),
+			       (unsigned)t3s.total_count,
+			       (unsigned)(MATRIX_TRAY_COLS * MATRIX_TRAY_ROWS));
+	}
+	else
+	{
+		(void)snprintf(tray_line, sizeof(tray_line),
+			       "Tray E/W/Y T1=%u/%u/%u T2=%u/%u/%u T3=%u/%u/%u",
+			       (unsigned)t1s.empty_count,
+			       (unsigned)t1s.white_count,
+			       (unsigned)t1s.yellow_count,
+			       (unsigned)t2s.empty_count,
+			       (unsigned)t2s.white_count,
+			       (unsigned)t2s.yellow_count,
+			       (unsigned)t3s.empty_count,
+			       (unsigned)t3s.white_count,
+			       (unsigned)t3s.yellow_count);
+	}
+	copy_trim(s_scr[5], sizeof(s_scr[5]), tray_line);
 
 	mb_fin = (AppMatrixModbus_LastCommitOk() != 0u) ? "OK" : "--";
-	if (AppMatrix_GetValidCount() == 0u)
+	if (valid_count == 0u)
 	{
 		final_st = "--";
 	}
-	else if ((AppMatrix_GetValidCount() == MATRIX_EXPECTED_ROWS) &&
+	else if ((valid_count == MATRIX_EXPECTED_ROWS) &&
 		 (AppMatrixModbus_LastCommitOk() != 0u))
 	{
 		final_st = "OK";
@@ -1427,7 +1442,7 @@ static void compose_screen_main(uint32_t tick_ms)
 	(void)snprintf(
 	    s_scr[6], sizeof(s_scr[6]),
 	    "MAT commit %s valid %u/%u raw_lines %lu geom:%s Fin:%s",
-	    mb_fin, (unsigned)AppMatrix_GetValidCount(),
+	    mb_fin, (unsigned)valid_count,
 	    (unsigned)MATRIX_EXPECTED_ROWS,
 	    (unsigned long)AppProtocol_GetRawLastLineCount(),
 	    geom_status_word(), final_st);

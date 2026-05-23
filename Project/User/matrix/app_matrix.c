@@ -230,6 +230,56 @@ uint8_t AppMatrix_CheckTrayFullOrEmpty(uint8_t tray_id, uint16_t cols, uint16_t 
 	return 44u;
 }
 
+uint8_t AppMatrix_GetTrayClassStats(uint8_t tray_id, uint16_t cols, uint16_t rows,
+				    AppMatrixTrayStats_t *out)
+{
+	uint16_t i;
+	uint32_t slots;
+
+	if (out == NULL)
+	{
+		return 0u;
+	}
+	memset(out, 0, sizeof(*out));
+	if (tray_id == 0u || cols == 0u || rows == 0u)
+	{
+		return 0u;
+	}
+
+	slots = (uint32_t)cols * (uint32_t)rows;
+	for (i = 0u; i < s_used; i++)
+	{
+		if (s_tbl[i].tray_id != (uint16_t)tray_id)
+		{
+			continue;
+		}
+
+		out->total_count++;
+		if (s_tbl[i].class_id == 0u)
+		{
+			out->empty_count++;
+		}
+		else if (s_tbl[i].class_id == 1u)
+		{
+			out->white_count++;
+		}
+		else if (s_tbl[i].class_id == 2u)
+		{
+			out->yellow_count++;
+		}
+		else
+		{
+			out->invalid_count++;
+		}
+	}
+
+	if ((uint32_t)out->total_count == slots && out->invalid_count == 0u)
+	{
+		out->complete = 1u;
+	}
+	return out->complete;
+}
+
 /*
  * 功能：判断 bit0~2 是否表示三盘均曾在矩阵数据中出现。
  * 交互：外部被 app_sort FL2 门禁。
