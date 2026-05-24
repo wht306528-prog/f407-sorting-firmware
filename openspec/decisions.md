@@ -109,5 +109,5 @@
 
 - 这是无硬件调试模式，不是真实标定；
 - 真实电机/机械臂接入前必须改回 0；
-- LCD 主界面会显示 `SIM:G1A1`；
-- SER 页会显示 `SIM MODE: geom 1 arm 1, no real arm/motor movement`。
+- LCD 主界面会显示 `SAFE_SIM:G1A1`；
+- SER 页会显示 `SCENE SAFE_SIM: geom 1 arm 1 conv 1 autoK2 1`。

@@ -12,6 +12,10 @@ Project/*.uvguix.*
 Project/*.log
 Project/_*.log
 build_log.txt
+tools/*.log
+tools/*.err
+tools/__pycache__/
+tools/**/*.pyc
 ../TEST/Target/Project/Objects/
 ../TEST/Target/Project/Listing/
 **/*/Output/

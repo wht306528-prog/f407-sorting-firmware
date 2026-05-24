@@ -245,55 +245,136 @@
 #endif
 
 /*
- * --------- 无机械臂联调仿真开关 ---------
+ * --------- 调试场景选择：只改 0 / 1，不用记一堆散开关 ---------
  *
- * 当前现场状态：真实机械臂没有接入，伺服驱动也还没有完成验证。
- * 所以下面两个开关只允许用于软件链路调试，目标是先看清楚：
+ * 改这里以后必须重新编译、重新烧录，F407 不会在运行时读取本文件。
  *
- *   鲁班猫矩阵 -> F407 Final矩阵 -> geom_ok -> AppSort RunFlag/FL状态
+ * 你日常只需要看下面两个开关：
  *
- * CFG_MATRIX_GEOM_SIM_MODE=1：
- *   不使用真实相机/苗盘/机械臂标定参数，也不跑真实IK。
- *   程序会给每个穴位生成一组稳定的假 X/Y/theta/脉冲值，并强制 geom_ok=1。
- *   这样可以先验证“收到矩阵以后，排序状态机能不能继续往下走”。
+ *   CFG_SCENE_PC_SERVO_SIM_TEST = 0/1
+ *   CFG_SCENE_REAL_HARDWARE     = 0/1
  *
- * CFG_ARM_MOTION_SIM_MODE=1：
- *   AppArm 不发送电机 Modbus 指令，也不驱动夹爪/升降阀。
- *   一次取放只检查源/目标行是否存在、geom_ok 是否有效，然后调用
- *   AppMatrix_ApplyTransfer() 更新内存里的 Final 矩阵。
+ * 规则：
  *
- * CFG_CONVEYOR_SIM_MODE=1：
- *   传送带流程不打开真实电机，也不等待光电传感器，直接返回“到位成功”。
- *   当前现场还没有确认传送带/光电接线时，必须保持为 1。
+ *   0 = 关 / false / 不启用这个场景
+ *   1 = 开 / true  / 启用这个场景
  *
- * CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2=1：
- *   KEY2 成功读完鲁班猫矩阵后，自动调用 AppSort_RequestStart()。
- *   这个开关只为当前联调服务：省掉触摸/上位机 Start 入口，方便观察 RunFlag/FL。
+ * 场景 0：两个都填 0，最安全，日常默认
  *
- * CFG_SORT_DEBUG_STEP_HOLD_MS：
- *   仿真联调时，每个排序子步骤之间至少间隔多少毫秒。
- *   目的不是模拟真实速度，而是让 LCD 上的 FL2/FL3/FL4 等状态不要一闪而过。
+ *   CFG_SCENE_PC_SERVO_SIM_TEST = 0
+ *   CFG_SCENE_REAL_HARDWARE     = 0
  *
- * 重要：接入真实电机、真实机械臂或真实传送带之前，必须重新检查这些开关。
+ *   用途：
+ *     - 只验证鲁班猫矩阵、Matrix Final、RunFlag/FL 状态机。
+ *     - 不发真实电机 Modbus。
+ *     - 不开真实传送带。
+ *     - 适合日常烧录、拍 LCD、给别人演示矩阵和 FL 状态。
+ *
+ *   自动得到：
+ *     - 几何 SIM 开：用假 X/Y/theta/脉冲，强制 geom_ok=1。
+ *     - 机械臂 SIM 开：AppArm 只改内存矩阵，不发电机命令，不驱动阀。
+ *     - 传送带 SIM 开：不等光电，不开传送带电机。
+ *
+ * 场景 1：PC 模拟伺服测试，只把第一个填 1
+ *
+ *   CFG_SCENE_PC_SERVO_SIM_TEST = 1
+ *   CFG_SCENE_REAL_HARDWARE     = 0
+ *
+ *   用途：
+ *     - 验证“Final 生成后，F407 真的会从 USART2 发电机 Modbus”。
+ *     - 必须用 USB-RS485 接电脑，并运行 tools/servo_modbus_sim.py。
+ *     - 不接真实电机；如果接了真实电机，这个场景可能连续下发多次运动命令。
+ *
+ *   接线示例：
+ *     - USB-RS485 T/R+ -> 开发板电机 485A
+ *     - USB-RS485 T/R- -> 开发板电机 485B
+ *     - USB-RS485 GND  -> 开发板 GND（建议接）
+ *
+ *   PC 命令示例：
+ *     python tools\servo_modbus_sim.py --port COM4 --baud 115200 -v
+ *
+ *   自动得到：
+ *     - 几何 SIM 开：仍用假脉冲，避免真实标定没做导致 geom:BAD。
+ *     - 机械臂 SIM 关：会真实发送 USART2 电机 Modbus。
+ *     - 传送带 SIM 开：仍不动传送带。
+ *
+ * 场景 2：真实硬件，暂时不要开
+ *
+ *   CFG_SCENE_PC_SERVO_SIM_TEST = 0
+ *   CFG_SCENE_REAL_HARDWARE     = 1
+ *
+ *   用途：
+ *     - 将来真实相机标定、真实电机、真实机械臂、真实传送带都准备好以后再用。
+ *
+ *   启用前必须确认：
+ *     - 急停可用；
+ *     - 两个电机方向正确；
+ *     - 零点脉冲正确；
+ *     - 单轴小行程测试通过；
+ *     - 真实几何标定参数已经写入；
+ *     - 传送带和光电接线确认；
+ *     - 不再使用假坐标/假脉冲。
+ *
+ * 禁止组合：
+ *
+ *   CFG_SCENE_PC_SERVO_SIM_TEST = 1
+ *   CFG_SCENE_REAL_HARDWARE     = 1
+ *
+ *   这两个不能同时开。一个是“电脑假伺服”，一个是“真实硬件”。
  */
+#ifndef CFG_SCENE_PC_SERVO_SIM_TEST
+#define CFG_SCENE_PC_SERVO_SIM_TEST  0u
+#endif
+
+#ifndef CFG_SCENE_REAL_HARDWARE
+#define CFG_SCENE_REAL_HARDWARE      0u
+#endif
+
+#if (CFG_SCENE_PC_SERVO_SIM_TEST != 0u) && (CFG_SCENE_REAL_HARDWARE != 0u)
+#error "Choose only one scene: PC servo simulator OR real hardware."
+#endif
+
+#if CFG_SCENE_REAL_HARDWARE
+#define CFG_SCENE_NAME               "REAL_HW"
+#define CFG_DERIVED_MATRIX_GEOM_SIM  0u
+#define CFG_DERIVED_ARM_MOTION_SIM   0u
+#define CFG_DERIVED_CONVEYOR_SIM     0u
+#define CFG_DERIVED_AUTO_START_KEY2  0u
+#define CFG_DERIVED_STEP_HOLD_MS     0u
+#elif CFG_SCENE_PC_SERVO_SIM_TEST
+#define CFG_SCENE_NAME               "PC_SERVO_SIM"
+#define CFG_DERIVED_MATRIX_GEOM_SIM  1u
+#define CFG_DERIVED_ARM_MOTION_SIM   0u
+#define CFG_DERIVED_CONVEYOR_SIM     1u
+#define CFG_DERIVED_AUTO_START_KEY2  1u
+#define CFG_DERIVED_STEP_HOLD_MS     500u
+#else
+#define CFG_SCENE_NAME               "SAFE_SIM"
+#define CFG_DERIVED_MATRIX_GEOM_SIM  1u
+#define CFG_DERIVED_ARM_MOTION_SIM   1u
+#define CFG_DERIVED_CONVEYOR_SIM     1u
+#define CFG_DERIVED_AUTO_START_KEY2  1u
+#define CFG_DERIVED_STEP_HOLD_MS     500u
+#endif
+
 #ifndef CFG_MATRIX_GEOM_SIM_MODE
-#define CFG_MATRIX_GEOM_SIM_MODE        1u
+#define CFG_MATRIX_GEOM_SIM_MODE        CFG_DERIVED_MATRIX_GEOM_SIM
 #endif
 
 #ifndef CFG_ARM_MOTION_SIM_MODE
-#define CFG_ARM_MOTION_SIM_MODE         1u
+#define CFG_ARM_MOTION_SIM_MODE         CFG_DERIVED_ARM_MOTION_SIM
 #endif
 
 #ifndef CFG_CONVEYOR_SIM_MODE
-#define CFG_CONVEYOR_SIM_MODE           1u
+#define CFG_CONVEYOR_SIM_MODE           CFG_DERIVED_CONVEYOR_SIM
 #endif
 
 #ifndef CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2
-#define CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2 1u
+#define CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2 CFG_DERIVED_AUTO_START_KEY2
 #endif
 
 #ifndef CFG_SORT_DEBUG_STEP_HOLD_MS
-#define CFG_SORT_DEBUG_STEP_HOLD_MS     500u
+#define CFG_SORT_DEBUG_STEP_HOLD_MS     CFG_DERIVED_STEP_HOLD_MS
 #endif
 
 #if CFG_MATRIX_RS485_USE_DE

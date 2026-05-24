@@ -302,13 +302,13 @@ CFG_ARM_MOTION_SIM_MODE
 LCD 提示：
 
 ```text
-SIM:G1A1
+SAFE_SIM:G1A1
 ```
 
 SER 页提示：
 
 ```text
-SIM MODE: geom 1 arm 1, no real arm/motor movement
+SCENE SAFE_SIM: geom 1 arm 1 conv 1 autoK2 1
 ```
 
 注意：

@@ -1321,7 +1321,8 @@ static void compose_screen_main(uint32_t tick_ms)
 	valid_count = AppMatrix_GetValidCount();
 
 #if CFG_MATRIX_GEOM_SIM_MODE || CFG_ARM_MOTION_SIM_MODE
-	(void)snprintf(sim_suffix, sizeof(sim_suffix), " SIM:G%uA%u",
+	(void)snprintf(sim_suffix, sizeof(sim_suffix), " %s:G%uA%u",
+		       CFG_SCENE_NAME,
 		       (unsigned)CFG_MATRIX_GEOM_SIM_MODE,
 		       (unsigned)CFG_ARM_MOTION_SIM_MODE);
 #else
@@ -1582,7 +1583,8 @@ static void compose_serial_diag(void)
 
 #if CFG_MATRIX_GEOM_SIM_MODE || CFG_ARM_MOTION_SIM_MODE
 	(void)snprintf(l1, sizeof(l1),
-		       "SIM MODE: geom %u arm %u conv %u autoK2 %u",
+		       "SCENE %s: geom %u arm %u conv %u autoK2 %u",
+		       CFG_SCENE_NAME,
 		       (unsigned)CFG_MATRIX_GEOM_SIM_MODE,
 		       (unsigned)CFG_ARM_MOTION_SIM_MODE,
 		       (unsigned)CFG_CONVEYOR_SIM_MODE,

@@ -153,11 +153,11 @@ CFG_ARM_MOTION_SIM_MODE  = 1
 1. F407 上电。
 2. 主界面 RunFlag 行应能看到：
    ```text
-   SIM:G1A1
+   SAFE_SIM:G1A1
    ```
 3. SER 页顶部应能看到：
    ```text
-   SIM MODE: geom 1 arm 1, no real arm/motor movement
+   SCENE SAFE_SIM: geom 1 arm 1 conv 1 autoK2 1
    ```
 4. 按 KEY2 读取矩阵。
 5. 期望：
@@ -186,3 +186,58 @@ CFG_ARM_MOTION_SIM_MODE  = 1
 2. 重新编译烧录。
 3. 先做真实标定和电机单轴测试。
 4. 不允许直接用 SIM 模式跑真实硬件。
+## 电机 Modbus 模拟驱动器闭环
+
+该测试不是默认安全模式。要跑这个闭环，先在 `Project/System/global_config.h`
+里切到 PC 伺服模拟场景：
+
+```c
+CFG_SCENE_PC_SERVO_SIM_TEST = 1
+CFG_SCENE_REAL_HARDWARE     = 0
+```
+
+这个场景自动得到：
+
+```c
+CFG_MATRIX_GEOM_SIM_MODE = 1
+CFG_ARM_MOTION_SIM_MODE = 0
+CFG_CONVEYOR_SIM_MODE = 1
+```
+
+含义：
+
+- 几何仍用假坐标/假脉冲，保证 `geom_ok=1`。
+- 机械臂取放会真实发送 USART2 电机 Modbus。
+- 传送带仍不动作，避免无光电时超时。
+
+接线：
+
+```text
+F407 USART2 RS485 A/B -> USB-RS485 -> PC
+不要把真实伺服驱动器接到同一条总线上。
+USART3 仍接鲁班猫矩阵 Modbus。
+```
+
+PC 端运行：
+
+```powershell
+python -m pip install pyserial
+python tools\servo_modbus_sim.py --port COM7 --baud 115200 -v
+```
+
+把 `COM7` 换成设备管理器里的 USB-RS485 端口。
+
+验证：
+
+1. F407 编译烧录。
+2. PC 端先启动 `servo_modbus_sim.py`。
+3. 鲁班猫 Modbus 服务保持运行。
+4. F407 复位后按 `KEY2`。
+5. LCD 应看到矩阵 commit 成功，并进入 `FL2/FL3`。
+6. PC 端应打印 `FC03/FC16/FC06` 收发帧：
+   - 读 `P0B-07` 当前位置；
+   - 写 `P10-14` 目标脉冲；
+   - 写 `P0D-18=507` 使能；
+   - 写 `P0D-08=3` 触发；
+   - 读 `P0B-04` 或 `P0B-07` 到位；
+   - 写 `P0D-08=0` 清触发。

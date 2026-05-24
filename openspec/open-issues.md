@@ -80,8 +80,8 @@ GEOM uvz ... xw/yw 250 0
 
 - `CFG_MATRIX_GEOM_SIM_MODE=1`
 - `CFG_ARM_MOTION_SIM_MODE=1`
-- Main 页 RunFlag 行显示 `SIM:G1A1`
-- SER 页显示 `SIM MODE: geom 1 arm 1, no real arm/motor movement`
+- Main 页 RunFlag 行显示 `SAFE_SIM:G1A1`
+- SER 页显示 `SCENE SAFE_SIM: geom 1 arm 1 conv 1 autoK2 1`
 
 期望：
 
