@@ -1309,6 +1309,7 @@ static void compose_screen_main(uint32_t tick_ms)
 	const ModbusTxnResult_t  *lr = ModbusMaster_GetLastResult();
 	char                      servo_suffix[36];
 	char                      tray_line[APP_UI_LINE_CAP];
+	char                      sim_suffix[24];
 	AppMatrixModbusDiag_t     md;
 	const char               *mb_fin;
 	const char               *final_st;
@@ -1318,6 +1319,14 @@ static void compose_screen_main(uint32_t tick_ms)
 	(void)tick_ms;
 	AppMatrixModbus_GetDiag(&md);
 	valid_count = AppMatrix_GetValidCount();
+
+#if CFG_MATRIX_GEOM_SIM_MODE || CFG_ARM_MOTION_SIM_MODE
+	(void)snprintf(sim_suffix, sizeof(sim_suffix), " SIM:G%uA%u",
+		       (unsigned)CFG_MATRIX_GEOM_SIM_MODE,
+		       (unsigned)CFG_ARM_MOTION_SIM_MODE);
+#else
+	sim_suffix[0] = '\0';
+#endif
 
 	switch (md.read_status)
 	{
@@ -1385,7 +1394,7 @@ static void compose_screen_main(uint32_t tick_ms)
 	    servo_suffix);
 
 	(void)snprintf(s_scr[4], sizeof(s_scr[4]),
-		       "RunFlag: %s", s_runflg);
+		       "RunFlag: %s%s", s_runflg, sim_suffix);
 
 	(void)AppMatrix_GetTrayClassStats(1u, MATRIX_TRAY_COLS,
 					  MATRIX_TRAY_ROWS, &t1s);
@@ -1570,6 +1579,17 @@ static void compose_serial_diag(void)
 	k = 0u;
 	serial_diag_append(&k,
 			   "Serial: U2 motor (PA2/3) + U3 matrix (RK3588 Modbus)");
+
+#if CFG_MATRIX_GEOM_SIM_MODE || CFG_ARM_MOTION_SIM_MODE
+	(void)snprintf(l1, sizeof(l1),
+		       "SIM MODE: geom %u arm %u conv %u autoK2 %u",
+		       (unsigned)CFG_MATRIX_GEOM_SIM_MODE,
+		       (unsigned)CFG_ARM_MOTION_SIM_MODE,
+		       (unsigned)CFG_CONVEYOR_SIM_MODE,
+		       (unsigned)CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2);
+	l1[sizeof(l1) - 1u] = '\0';
+	serial_diag_append(&k, l1);
+#endif
 
 	(void)snprintf(
 	    l1, sizeof(l1),

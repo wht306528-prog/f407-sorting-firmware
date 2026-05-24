@@ -72,3 +72,22 @@ GEOM uvz ... xw/yw 250 0
 
 - 等几何/机械臂方向明确后，再重新设计业务状态机。
 
+## O005 - SIM 模式现场验证
+
+状态：待烧录测试。
+
+当前实现：
+
+- `CFG_MATRIX_GEOM_SIM_MODE=1`
+- `CFG_ARM_MOTION_SIM_MODE=1`
+- Main 页 RunFlag 行显示 `SIM:G1A1`
+- SER 页显示 `SIM MODE: geom 1 arm 1, no real arm/motor movement`
+
+期望：
+
+- KEY2 后 `geom:OK`；
+- Final 页每行 `geom` 为 1；
+- `Xw/Yw` 不再全部固定为 `250/0`；
+- 状态机可以继续推进，用于观察 RunFlag/FL 逻辑。
+
+真实机械臂接入前必须关闭两个 SIM 宏。

@@ -128,7 +128,7 @@ uint8_t AppMatrix_ApplyTransfer(uint16_t src_idx, uint16_t dst_idx);
  * 格位全集检查通过后拷贝入表。
  * @param failbuf 失败原因的短 ASCII（可上屏）；可为 NULL 则不写原因
  * @param fail_cap failbuf 字节容量，含结尾 0
- * @return 1 成功；0 失败（矩阵已 AppMatrix_Clear）
+ * @return 1 成功；0 失败（保留上一帧成功矩阵，不自动 AppMatrix_Clear）
  */
 uint8_t AppMatrix_SetFromTcpParser(const MatrixFinalRow_t *rows, uint16_t n_rows,
 				  uint16_t declared_count,

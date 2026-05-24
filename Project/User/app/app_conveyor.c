@@ -22,6 +22,19 @@
  */
 uint8_t AppConveyor_RunUntilSensor(uint8_t conveyor_id, uint32_t timeout_ms)
 {
+#if CFG_CONVEYOR_SIM_MODE
+	/*
+	 * 传送带仿真：当前现场还没有确认真实传送带和光电输入。
+	 * 这里不打开任何传送带电机，也不等待光电，直接当作“光电已触发”返回成功。
+	 * 这样 AppSort 可以继续跑 FL4/FL5/FL6 逻辑，但不会误驱动硬件。
+	 */
+	(void)timeout_ms;
+	if (conveyor_id > BSP_CONV_ID_2)
+	{
+		return 1u;
+	}
+	return 0u;
+#else
 	uint32_t t0;
 
 	if (conveyor_id > BSP_CONV_ID_2)
@@ -53,4 +66,5 @@ uint8_t AppConveyor_RunUntilSensor(uint8_t conveyor_id, uint32_t timeout_ms)
 
 	BSP_Conveyor_SetMotor(conveyor_id, 0u);
 	return 1u;
+#endif
 }

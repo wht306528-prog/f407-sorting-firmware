@@ -71,6 +71,7 @@ const char *AppArm_ResultText(uint8_t code)
  * 功能：可中止的毫秒延时，25ms 切片内轮询急停升级。
  * 交互：内部被 valve_*_sequence 调用；调用 AppMotionAbort_PollEscalate、Delay_ms；返回 1 表示被中断。
  */
+#if !CFG_ARM_MOTION_SIM_MODE
 static uint8_t Delay_ms_abortable_chunked(uint32_t ms)
 {
 	uint32_t left = ms;
@@ -92,12 +93,14 @@ static uint8_t Delay_ms_abortable_chunked(uint32_t ms)
 	}
 	return 0u;
 }
+#endif
 
 /*
  * 功能：读矩阵行 θ1/θ2，换算脉冲后经 Modbus 驱动两轴到该位姿。
  * 交互：内部被 AppArm_PickPlace；调用 AppMatrix_GetRow、AppMotor_GotoAbsTargetAsRelative；
  * is_dst_move 区分源/目标段错误码。
  */
+#if !CFG_ARM_MOTION_SIM_MODE
 static uint8_t move_joints_to_row(uint16_t idx, uint8_t is_dst_move)
 {
 	MatrixFinalRow_t r;
@@ -200,6 +203,7 @@ static uint8_t valve_place_sequence(void)
 	}
 	return 0u;
 }
+#endif
 
 /*
  * 功能：两轴回到 MCU 标定的零点绝对脉冲（app_calibration_params.h 中 CALIB_JOINT*_ZERO_PULSE）。
@@ -207,8 +211,13 @@ static uint8_t valve_place_sequence(void)
  */
 void AppArm_GoHome(void)
 {
+#if CFG_ARM_MOTION_SIM_MODE
+	/* SIM模式下默认没有真实机械臂，禁止在这里发送伺服Modbus指令。 */
+	return;
+#else
 	(void)AppMotor_GotoPulse(CFG_MODBUS_SLAVE_MOTOR1, (int32_t)CALIB_JOINT1_ZERO_PULSE);
 	(void)AppMotor_GotoPulse(CFG_MODBUS_SLAVE_MOTOR2, (int32_t)CALIB_JOINT2_ZERO_PULSE);
+#endif
 }
 
 /*
@@ -217,6 +226,33 @@ void AppArm_GoHome(void)
  */
 uint8_t AppArm_PickPlace(uint16_t src_idx, uint16_t dst_idx)
 {
+#if CFG_ARM_MOTION_SIM_MODE
+	MatrixFinalRow_t src;
+	MatrixFinalRow_t dst;
+
+	/*
+	 * 软件假取放：只用于没有电机、没有气阀、没有真实机械臂时观察 AppSort
+	 * 的 RunFlag/FL 状态变化。它不会让任何硬件动作。
+	 * 做真实硬件运动测试前，必须关闭 CFG_ARM_MOTION_SIM_MODE。
+	 */
+	if (!AppMatrix_GetRow(src_idx, &src) || !AppMatrix_GetRow(dst_idx, &dst))
+	{
+		return 1u;
+	}
+	if (src.geom_ok == 0u)
+	{
+		return 7u;
+	}
+	if (dst.geom_ok == 0u)
+	{
+		return 8u;
+	}
+	if (!AppMatrix_ApplyTransfer(src_idx, dst_idx))
+	{
+		return 9u;
+	}
+	return 0u;
+#else
 	uint8_t e;
 
 	e = move_joints_to_row(src_idx, 0u);
@@ -258,4 +294,5 @@ uint8_t AppArm_PickPlace(uint16_t src_idx, uint16_t dst_idx)
 	}
 
 	return 0u;
+#endif
 }

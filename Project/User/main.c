@@ -148,6 +148,14 @@ int main(void)
 						GTP_TouchPoll();
 						AppDisplay_Refresh(SysTick_GetMs());
 					}
+#if CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2
+					/*
+					 * 联调入口：KEY2 读矩阵成功后自动启动 AppSort。
+					 * 当前没有可靠触摸/上位机 Start 入口；这个开关只用于 SIM 阶段，
+					 * 目的是观察 RunFlag/FL 是否能从 IDLE 进入 WAIT/SORTING/FL2/FL3。
+					 */
+					AppSort_RequestStart();
+#endif
 				} else {
 					AppDisplay_SetRunFlagText("MAT READ BUSY");
 				}

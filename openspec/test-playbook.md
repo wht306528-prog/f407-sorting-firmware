@@ -134,3 +134,55 @@ GEOM uvz ... xw/yw 250 0
 - 不要把 `geom:BAD` 当成鲁班猫格式错误；
 - 不要改已经通过的 Modbus 链路。
 
+## 7. 无机械臂 SIM 模式测试
+
+当前无机械臂阶段，固件允许打开两个调试开关：
+
+```c
+CFG_MATRIX_GEOM_SIM_MODE = 1
+CFG_ARM_MOTION_SIM_MODE  = 1
+```
+
+含义：
+
+- `GEOM_SIM`：收到矩阵后，不用真实标定和 IK，给每个格子生成稳定的假 X/Y/theta/pulse，并让 `geom_ok=1`。
+- `ARM_MOTION_SIM`：状态机调用机械臂取放时，不发电机 Modbus、不驱动电磁阀，只更新内存矩阵。
+
+烧录后检查：
+
+1. F407 上电。
+2. 主界面 RunFlag 行应能看到：
+   ```text
+   SIM:G1A1
+   ```
+3. SER 页顶部应能看到：
+   ```text
+   SIM MODE: geom 1 arm 1, no real arm/motor movement
+   ```
+4. 按 KEY2 读取矩阵。
+5. 期望：
+   ```text
+   MAT U3 OK
+   rows 150/150
+   pkt 15/15
+   MAT commit OK
+   valid 150/150
+   geom:OK
+   ```
+6. 进入 FIN 页查看 Final 行：
+   - `geom` 应为 1；
+   - `Xw/Yw` 不应再全部是 `250/0`；
+   - `P1/P2` 应有稳定的假脉冲值。
+
+如果看到 `geom:BAD`：
+
+- 先确认 `CFG_MATRIX_GEOM_SIM_MODE` 是否为 1；
+- 确认烧录的是新固件；
+- 再拍主界面和 SER 页。
+
+如果后续接入真实电机/机械臂：
+
+1. 必须把两个宏改为 0。
+2. 重新编译烧录。
+3. 先做真实标定和电机单轴测试。
+4. 不允许直接用 SIM 模式跑真实硬件。

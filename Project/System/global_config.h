@@ -244,6 +244,58 @@
 #define CFG_MATRIX_RS485_USE_DE         0u
 #endif
 
+/*
+ * --------- 无机械臂联调仿真开关 ---------
+ *
+ * 当前现场状态：真实机械臂没有接入，伺服驱动也还没有完成验证。
+ * 所以下面两个开关只允许用于软件链路调试，目标是先看清楚：
+ *
+ *   鲁班猫矩阵 -> F407 Final矩阵 -> geom_ok -> AppSort RunFlag/FL状态
+ *
+ * CFG_MATRIX_GEOM_SIM_MODE=1：
+ *   不使用真实相机/苗盘/机械臂标定参数，也不跑真实IK。
+ *   程序会给每个穴位生成一组稳定的假 X/Y/theta/脉冲值，并强制 geom_ok=1。
+ *   这样可以先验证“收到矩阵以后，排序状态机能不能继续往下走”。
+ *
+ * CFG_ARM_MOTION_SIM_MODE=1：
+ *   AppArm 不发送电机 Modbus 指令，也不驱动夹爪/升降阀。
+ *   一次取放只检查源/目标行是否存在、geom_ok 是否有效，然后调用
+ *   AppMatrix_ApplyTransfer() 更新内存里的 Final 矩阵。
+ *
+ * CFG_CONVEYOR_SIM_MODE=1：
+ *   传送带流程不打开真实电机，也不等待光电传感器，直接返回“到位成功”。
+ *   当前现场还没有确认传送带/光电接线时，必须保持为 1。
+ *
+ * CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2=1：
+ *   KEY2 成功读完鲁班猫矩阵后，自动调用 AppSort_RequestStart()。
+ *   这个开关只为当前联调服务：省掉触摸/上位机 Start 入口，方便观察 RunFlag/FL。
+ *
+ * CFG_SORT_DEBUG_STEP_HOLD_MS：
+ *   仿真联调时，每个排序子步骤之间至少间隔多少毫秒。
+ *   目的不是模拟真实速度，而是让 LCD 上的 FL2/FL3/FL4 等状态不要一闪而过。
+ *
+ * 重要：接入真实电机、真实机械臂或真实传送带之前，必须重新检查这些开关。
+ */
+#ifndef CFG_MATRIX_GEOM_SIM_MODE
+#define CFG_MATRIX_GEOM_SIM_MODE        1u
+#endif
+
+#ifndef CFG_ARM_MOTION_SIM_MODE
+#define CFG_ARM_MOTION_SIM_MODE         1u
+#endif
+
+#ifndef CFG_CONVEYOR_SIM_MODE
+#define CFG_CONVEYOR_SIM_MODE           1u
+#endif
+
+#ifndef CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2
+#define CFG_SORT_DEBUG_AUTO_START_AFTER_KEY2 1u
+#endif
+
+#ifndef CFG_SORT_DEBUG_STEP_HOLD_MS
+#define CFG_SORT_DEBUG_STEP_HOLD_MS     500u
+#endif
+
 #if CFG_MATRIX_RS485_USE_DE
 #define CFG_MATRIX_RS485_DE_PORT        GPIOC
 #define CFG_MATRIX_RS485_DE_PIN         GPIO_Pin_1

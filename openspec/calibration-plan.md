@@ -131,3 +131,22 @@ F407/Calibration
 - `Calibration/calibration_config.json`
 - `Calibration/calibration_results.json`
 
+## 当前 SIM 实现
+
+当前已采用两个宏：
+
+```c
+CFG_MATRIX_GEOM_SIM_MODE
+CFG_ARM_MOTION_SIM_MODE
+```
+
+用途：
+
+- 证明 `Final Matrix -> geom fields -> LCD` 软件链路可以显示非塌缩坐标；
+- 证明 `AppSort -> AppArm_PickPlace -> AppMatrix_ApplyTransfer` 软件状态链路能推进。
+
+不允许用途：
+
+- 驱动真实电机；
+- 作为现场标定结果；
+- 替代正式手眼标定。

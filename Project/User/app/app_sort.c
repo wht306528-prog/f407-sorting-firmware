@@ -96,6 +96,9 @@ static uint32_t           s_estop_blink_t0_ms;
 static int32_t            s_estop_fb_m1;
 static int32_t            s_estop_fb_m2;
 static uint32_t           s_estop_mon_last_ms;
+#if CFG_SORT_DEBUG_STEP_HOLD_MS > 0u
+static uint32_t           s_debug_last_sort_step_ms;
+#endif
 
 /*
  * 功能：停机安全侧：阀/带输出置安全态并软件禁用两台伺服。
@@ -354,6 +357,18 @@ static void run_conveyor_flag(uint8_t conv_id)
  */
 static void sorting_tick(uint32_t tick_ms)
 {
+#if CFG_SORT_DEBUG_STEP_HOLD_MS > 0u
+	/*
+	 * 联调观察用节拍：SIM 模式下机械臂/传送带都会瞬间返回成功。
+	 * 如果不降速，FL2/FL3/FL4 等标志位可能在 LCD 刷新前就跑完。
+	 * 这里把排序子步骤人为放慢，方便现场拍照确认状态机是否按预期推进。
+	 */
+	if ((tick_ms - s_debug_last_sort_step_ms) < (uint32_t)CFG_SORT_DEBUG_STEP_HOLD_MS)
+	{
+		return;
+	}
+	s_debug_last_sort_step_ms = tick_ms;
+#endif
 	if (s_req_standby45 != 0u)
 	{
 		s_req_standby45 = 0u;
@@ -479,6 +494,9 @@ void AppSort_Init(void)
 	s_flag44_active = 0u;
 	s_req_standby45 = 0u;
 	s_estop_ind_hold_armed = 0u;
+#if CFG_SORT_DEBUG_STEP_HOLD_MS > 0u
+	s_debug_last_sort_step_ms = 0u;
+#endif
 	AppIndicator_SetState(APP_IND_IDLE);
 	AppDisplay_SetRunFlagText("IDLE");
 	AppDisplay_SetFaultText("idle");
@@ -504,6 +522,9 @@ void AppSort_RequestEstop(void)
 	(void)AppMotor_SetEmergencyMode(CFG_MODBUS_SLAVE_MOTOR1, 1u);
 	(void)AppMotor_SetEmergencyMode(CFG_MODBUS_SLAVE_MOTOR2, 1u);
 	s_estop_mon_last_ms = 0u;
+#if CFG_SORT_DEBUG_STEP_HOLD_MS > 0u
+	s_debug_last_sort_step_ms = 0u;
+#endif
 	sort_poll_estop_position_monitor(SysTick_GetMs());
 	s_estop_blink_t0_ms = SysTick_GetMs();
 	s_estop_ind_hold_armed = 1u;
@@ -533,6 +554,9 @@ void AppSort_RequestClearFault(void)
 	s_step = APP_SORT_STEP_WAIT_MATRIX;
 	s_sys_run_flag = APP_SORT_SYS_IDLE;
 	s_flag44_active = 0u;
+#if CFG_SORT_DEBUG_STEP_HOLD_MS > 0u
+	s_debug_last_sort_step_ms = 0u;
+#endif
 	AppIndicator_SetState(APP_IND_IDLE);
 	AppDisplay_SetFaultText("cleared,IDLE");
 	AppDisplay_SetRunFlagText("CLR");
@@ -562,6 +586,9 @@ void AppSort_RequestStart(void)
 		s_step = APP_SORT_STEP_WAIT_MATRIX;
 		s_sys_run_flag = APP_SORT_SYS_IDLE;
 		s_flag44_active = 0u;
+#if CFG_SORT_DEBUG_STEP_HOLD_MS > 0u
+		s_debug_last_sort_step_ms = 0u;
+#endif
 		(void)AlarmLight_Off();
 		AppDisplay_SetFaultText("RUN");
 		AppDisplay_SetRunFlagText("RUN");

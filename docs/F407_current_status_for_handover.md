@@ -283,3 +283,36 @@ SER 页：
 - `GEOM uvz u v z xw/yw X Y`：第一条失败行的输入和输出。
 - 如果 `xw/yw` 一直是 `250 0`，说明标定仍是占位。
 
+## 10. 当前新增的无机械臂 SIM 模式
+
+当前现场没有机械臂，也未验证电机，因此新增两个临时调试宏：
+
+```c
+CFG_MATRIX_GEOM_SIM_MODE
+CFG_ARM_MOTION_SIM_MODE
+```
+
+用途：
+
+- 让 Final 矩阵的几何字段临时生成假值；
+- 让 `geom_ok=1`；
+- 让状态机可以继续跑到 FL2/FL3 等系统标志位；
+- 让 `AppArm_PickPlace()` 只更新内存矩阵，不发电机、不驱动阀。
+
+LCD 提示：
+
+```text
+SIM:G1A1
+```
+
+SER 页提示：
+
+```text
+SIM MODE: geom 1 arm 1, no real arm/motor movement
+```
+
+注意：
+
+- 这是无硬件调试模式；
+- 不是真实标定；
+- 接入真实机械臂和电机前必须关闭。

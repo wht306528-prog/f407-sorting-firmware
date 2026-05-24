@@ -31,6 +31,43 @@ static uint8_t          s_have_mask;
 static uint8_t          s_geom_dirty;
 static AppMatrixGeomDiag_t s_geom_diag;
 
+#if CFG_MATRIX_GEOM_SIM_MODE
+/*
+ * 无机械臂联调辅助函数。
+ *
+ * 这里生成的坐标不是标定结果，不能拿去驱动真实机械臂。
+ * 它只给每个收到的穴位填一组稳定的假机械臂平面坐标、关节角和电机脉冲，
+ * 让后面的 AppSort RunFlag/FL 逻辑在没有机械臂、没有电机的情况下也能继续跑。
+ */
+static void fill_sim_geom(MatrixFinalRow_t *r)
+{
+	float tray_x0;
+	float col0;
+	float row0;
+
+	if (r == NULL)
+	{
+		return;
+	}
+
+	col0 = (float)((r->col > 0u) ? (r->col - 1u) : 0u);
+	row0 = (float)((r->row > 0u) ? (r->row - 1u) : 0u);
+	tray_x0 = -240.0f + ((float)((r->tray_id > 0u) ? (r->tray_id - 1u) : 0u) * 240.0f);
+
+	r->Xc_mm = (float)r->u;
+	r->Yc_mm = (float)r->v;
+	r->Xw_mm = tray_x0 + col0 * 40.0f;
+	r->Yw_mm = 120.0f + row0 * 32.0f;
+	r->theta1_deg = -20.0f + col0 * 4.0f + (float)(r->tray_id * 2u);
+	r->theta2_deg = 20.0f + row0 * 2.0f + (float)(r->tray_id * 2u);
+	r->pulse_motor1_abs = (int32_t)(1000L + (int32_t)r->tray_id * 1000L +
+					(int32_t)r->row * 50L + (int32_t)r->col * 5L);
+	r->pulse_motor2_abs = (int32_t)(2000L + (int32_t)r->tray_id * 1000L +
+					(int32_t)r->row * 60L + (int32_t)r->col * 6L);
+	r->geom_ok = 1u;
+}
+#endif
+
 /*
  * 功能：对缓存表 s_tbl 全量做相机→臂平面坐标与两关节逆解，失败行 geom_ok=0。
  * 交互：内部仅在 AppMatrix_FlushPendingGeometry 中调用；内部调用 UV 射线求交平面、对称五杆逆解；读 app_calibration_params.h。
@@ -42,6 +79,9 @@ static void recompute_geom(void)
 	memset(&s_geom_diag, 0, sizeof(s_geom_diag));
 	for (i = 0u; i < s_used; i++)
 	{
+#if CFG_MATRIX_GEOM_SIM_MODE
+		fill_sim_geom(&s_tbl[i]);
+#else
 		float xc = 0.f;
 		float yc = 0.f;
 		float xw = 0.f;
@@ -95,6 +135,7 @@ static void recompute_geom(void)
 			s_tbl[i].pulse_motor1_abs = 0;
 			s_tbl[i].pulse_motor2_abs = 0;
 		}
+#endif
 	}
 }
 
@@ -488,7 +529,8 @@ uint8_t AppMatrix_ApplyTransfer(uint16_t src_idx, uint16_t dst_idx)
 
 /*
  * 功能：经协议解析写入矩阵表；校验行列/网格规则，置 s_geom_dirty 待主循环逆解。
- * 交互：外部被 Modbus 成功路径与 app_protocol END 成功路径调用；内部调用 AppMatrix_Clear、AppMatrixRaw_Validate*；失败写 failbuf。
+ * 交互：外部被 Modbus 成功路径与 app_protocol END 成功路径调用；内部调用 AppMatrixRaw_Validate*。
+ *       失败只写 failbuf 并保留上一帧成功矩阵；显式断线/换源时由调用方 AppMatrix_Clear。
  */
 uint8_t AppMatrix_SetFromTcpParser(const MatrixFinalRow_t *rows, uint16_t n_rows,
 				   uint16_t declared_count,
@@ -500,7 +542,6 @@ uint8_t AppMatrix_SetFromTcpParser(const MatrixFinalRow_t *rows, uint16_t n_rows
 
 	if (rows == NULL)
 	{
-		AppMatrix_Clear();
 		if (fb && fc > 0u)
 		{
 			(void)snprintf(fb, fc, "MAT:null rows");
@@ -510,7 +551,6 @@ uint8_t AppMatrix_SetFromTcpParser(const MatrixFinalRow_t *rows, uint16_t n_rows
 	if (declared_count != n_rows || n_rows > MATRIX_MAX_ROWS ||
 	    n_rows == 0u)
 	{
-		AppMatrix_Clear();
 		if (fb && fc > 0u)
 		{
 			(void)snprintf(fb, fc, "MAT:decl/n");
@@ -521,7 +561,6 @@ uint8_t AppMatrix_SetFromTcpParser(const MatrixFinalRow_t *rows, uint16_t n_rows
 	{
 		if (!AppMatrixRaw_ValidateFullGrid(rows, n_rows, fb, fc))
 		{
-			AppMatrix_Clear();
 			return 0u;
 		}
 	}
@@ -529,7 +568,6 @@ uint8_t AppMatrix_SetFromTcpParser(const MatrixFinalRow_t *rows, uint16_t n_rows
 	{
 		if (!AppMatrixRaw_ValidateSparseSlots(rows, n_rows, fb, fc))
 		{
-			AppMatrix_Clear();
 			return 0u;
 		}
 	}
